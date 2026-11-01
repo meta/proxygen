@@ -102,7 +102,6 @@ proxygen_add_library(proxygen_hq_samples
     Folly::folly_conv
     Folly::folly_file
     Folly::folly_file_util
-    Folly::folly_format
     Folly::folly_memory
     Folly::folly_random
     Folly::folly_string
