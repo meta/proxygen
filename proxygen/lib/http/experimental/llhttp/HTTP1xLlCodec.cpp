@@ -7,6 +7,7 @@
  */
 
 #include <folly/Conv.h>
+#include <folly/Random.h>
 #include <folly/String.h>
 #include <folly/base64.h>
 #include <folly/io/Cursor.h>
@@ -16,6 +17,47 @@
 #include <proxygen/lib/http/codec/CodecUtil.h>
 #include <proxygen/lib/http/experimental/llhttp/HTTP1xLlCodec.h>
 
+namespace {
+
+unsigned u64toa(uint64_t value, char* dst) {
+
+  char* start = dst;
+  do {
+    *dst++ = '0' + (value % 10);
+    value /= 10;
+  } while (value != 0);
+  unsigned length = dst - start;
+
+  dst--;
+  while (dst > start) {
+    char swap = *dst;
+    *dst = *start;
+    *start = swap;
+    dst--;
+    start++;
+  }
+  return length;
+}
+
+void appendUint(folly::IOBufQueue& queue, size_t& len, uint64_t value) {
+  char buf[32];
+  size_t encodedLen = u64toa(value, buf);
+  queue.append(buf, encodedLen);
+  len += encodedLen;
+}
+
+#define appendLiteral(queue, len, str) \
+  (len) += (sizeof(str) - 1);          \
+  (queue).append(str, sizeof(str) - 1)
+
+void appendString(folly::IOBufQueue& queue,
+                  size_t& len,
+                  folly::StringPiece str) {
+  queue.append(str.data(), str.size());
+  len += str.size();
+}
+} // namespace
+
 namespace proxygen {
 
 constexpr uint32_t kHeaderByteCap = (80 * 1024);
@@ -24,7 +66,9 @@ constexpr size_t kHeaderSeparatorBytes = 2;
 constexpr uint64_t kMaxDataSize = std::numeric_limits<int64_t>::max();
 constexpr folly::StringPiece kHttpProtocol = "HTTP";
 constexpr std::string_view kChunked = "chunked";
+constexpr std::string_view CRLF = "\r\n";
 constexpr std::string_view kUpgradeToken = "websocket";
+constexpr std::string_view kUpgradeConnectionToken = "Upgrade";
 constexpr std::string_view kWSMagicString =
     "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -177,55 +221,459 @@ bool HTTP1xLlCodec::closeOnEgressComplete() const {
   return !isEgressBusy() && !isReusable();
 }
 
+void HTTP1xLlCodec::addDateHeader(folly::IOBufQueue& writeBuf, size_t& len) {
+  appendLiteral(writeBuf, len, "Date: ");
+  appendString(writeBuf, len, HTTPMessage::formatDateHeader());
+  appendString(writeBuf, len, CRLF);
+}
+
+std::string HTTP1xLlCodec::generateWebsocketKey() const {
+  std::array<unsigned char, 16> arr{};
+  folly::Random::secureRandom(arr.data(), arr.size());
+  return folly::base64Encode(std::string_view((char*)arr.data(), arr.size()));
+}
+
+void HTTP1xLlCodec::serializeWebsocketHeader(folly::IOBufQueue& writeBuf,
+                                             size_t& len,
+                                             bool upstream) {
+  if (upstream) {
+    appendLiteral(writeBuf, len, "Upgrade: ");
+    appendString(writeBuf, len, kUpgradeToken);
+    appendString(writeBuf, len, CRLF);
+    connectionState_.upgradeHeader = std::string(kUpgradeToken);
+
+    auto key = generateWebsocketKey();
+    appendLiteral(writeBuf, len, "Sec-WebSocket-Key: ");
+    appendString(writeBuf, len, key);
+    appendString(writeBuf, len, CRLF);
+    DCHECK(connectionState_.websocketAccept.empty());
+    connectionState_.websocketAccept = generateWebsocketAccept(key);
+  } else {
+    appendLiteral(writeBuf, len, "Upgrade: ");
+    appendString(writeBuf, len, kUpgradeToken);
+    appendString(writeBuf, len, CRLF);
+
+    appendLiteral(writeBuf, len, "Sec-WebSocket-Accept: ");
+    appendString(writeBuf, len, connectionState_.websocketAccept);
+    appendString(writeBuf, len, CRLF);
+  }
+}
+
 void HTTP1xLlCodec::generateHeader(
-    folly::IOBufQueue& /*writeBuf*/,
-    StreamID /*txn*/,
-    const HTTPMessage& /*msg*/,
-    bool /*eom*/,
-    HTTPHeaderSize* /*size*/,
-    const folly::Optional<HTTPHeaders>& /*extraHeaders*/) {
+    folly::IOBufQueue& writeBuf,
+    StreamID txn,
+    const HTTPMessage& msg,
+    bool eom,
+    HTTPHeaderSize* size,
+    const folly::Optional<HTTPHeaders>& extraHeaders) {
+  if (connectionState_.keepAlive && connectionState_.disableKeepalivePending) {
+    connectionState_.keepAlive = false;
+  }
+  const bool upstream = isUpstream(transportDirection_);
+  const bool downstream = !upstream;
+  bool expectsNoResponseBody = false;
+  if (upstream) {
+    DCHECK_EQ(txn, egressState_.txnID);
+    if (!connectionState_.upgradeHeader.empty()) {
+      LOG(DFATAL) << "Attempted to pipeline HTTP request with pending upgrade";
+      connectionState_.upgradeHeader.clear();
+      connectionState_.upgradePhase = UpgradePhase::NONE;
+    }
+    egressState_.messagePending = true;
+    ingressState_.messagePending = true;
+    connectionState_.connectRequest =
+        (msg.getMethod() == HTTPMethod::CONNECT) &&
+        !msg.isEgressWebsocketUpgrade();
+    connectionState_.headRequest = (msg.getMethod() == HTTPMethod::HEAD);
+  } else {
+    if ((txn != egressState_.txnID + 1 &&
+         !(txn == egressState_.txnID && egressState_.is1xxResponse)) ||
+        (txn > ingressState_.txnID)) {
+      LOG(DFATAL) << "Out of order, duplicate or premature HTTP response";
+    }
+    if (!egressState_.is1xxResponse) {
+      ++egressState_.txnID;
+    }
+    egressState_.is1xxResponse =
+        msg.is1xxResponse() || msg.isEgressWebsocketUpgrade();
+
+    expectsNoResponseBody =
+        connectionState_.connectRequest || connectionState_.headRequest ||
+        RFC2616::responseBodyMustBeEmpty(msg.getStatusCode());
+  }
+
+  int statusCode = 0;
+  folly::StringPiece statusMessage;
+  if (downstream) {
+    statusCode = msg.getStatusCode();
+    statusMessage = msg.getStatusMessage();
+
+    if (msg.isEgressWebsocketUpgrade()) {
+      statusCode = 101;
+      statusMessage = HTTPMessage::getDefaultReason(101);
+    }
+    if (isUpgradePending() && statusCode == 101) {
+      connectionState_.upgradePhase = UpgradePhase::UPGRADED;
+    } else if (isUpgradePending() && statusCode >= 200) {
+      connectionState_.upgradePhase = UpgradePhase::NONE;
+    } else if (connectionState_.connectRequest && isUpgradeComplete() &&
+               statusCode >= 300) {
+      connectionState_.upgradePhase = UpgradePhase::NONE;
+      connectionState_.keepAlive = false;
+    }
+  } else {
+    if (connectionState_.connectRequest || msg.isEgressWebsocketUpgrade()) {
+      connectionState_.upgradePhase = UpgradePhase::PENDING;
+    }
+  }
+
+  egressState_.chunked = msg.getIsChunked() && !isUpgrade();
+  egressState_.finalChunkWritten = false;
+  std::pair<uint8_t, uint8_t> version = msg.getHTTPVersion();
+  if (version > HTTPMessage::kHTTPVersion11) {
+    version = HTTPMessage::kHTTPVersion11;
+  }
+
+  size_t len = 0;
+  switch (transportDirection_) {
+    case TransportDirection::DOWNSTREAM:
+      DCHECK_NE(statusCode, 0);
+      if (version == HTTPMessage::kHTTPVersion09) {
+        return;
+      }
+      if (force1_1_ && version < HTTPMessage::kHTTPVersion11) {
+        version = HTTPMessage::kHTTPVersion11;
+      }
+      appendLiteral(writeBuf, len, "HTTP/");
+      appendUint(writeBuf, len, version.first);
+      appendLiteral(writeBuf, len, ".");
+      appendUint(writeBuf, len, version.second);
+      appendLiteral(writeBuf, len, " ");
+      appendUint(writeBuf, len, statusCode);
+      appendLiteral(writeBuf, len, " ");
+      appendString(writeBuf, len, statusMessage);
+      break;
+    case TransportDirection::UPSTREAM:
+      if (force1_1_ && version < HTTPMessage::kHTTPVersion11) {
+        version = HTTPMessage::kHTTPVersion11;
+      }
+      if (msg.isEgressWebsocketUpgrade()) {
+        appendString(writeBuf, len, methodToString(HTTPMethod::GET));
+      } else {
+        appendString(writeBuf, len, msg.getMethodString());
+      }
+      appendLiteral(writeBuf, len, " ");
+      if (connectionState_.connectRequest && msg.getURL().empty()) {
+        appendString(
+            writeBuf, len, msg.getHeaders().getSingleOrEmpty(HTTP_HEADER_HOST));
+      } else {
+        appendString(writeBuf, len, msg.getURL());
+      }
+      if (version != HTTPMessage::kHTTPVersion09) {
+        appendLiteral(writeBuf, len, " HTTP/");
+        appendUint(writeBuf, len, version.first);
+        appendLiteral(writeBuf, len, ".");
+        appendUint(writeBuf, len, version.second);
+      }
+      egressState_.mayChunk = (version.first == 1) && (version.second >= 1);
+      break;
+  }
+  appendString(writeBuf, len, CRLF);
+
+  if (connectionState_.keepAlive &&
+      (!msg.wantsKeepalive() || version.first < 1 ||
+       (downstream && version == HTTPMessage::kHTTPVersion10 &&
+        egressState_.peerRequestedKeepalive != KeepaliveRequested::ENABLED))) {
+    connectionState_.keepAlive = false;
+  }
+  egressState_.chunked &= egressState_.mayChunk;
+  if (version == HTTPMessage::kHTTPVersion09) {
+    parser_->setHttpVersion(0, 9);
+    return;
+  }
+  folly::StringPiece deferredContentLength;
+  bool hasTransferEncodingChunked = false;
+  bool hasDateHeader = false;
+  bool hasUpgradeHeader = false;
+  std::vector<folly::StringPiece> connectionTokens;
+  size_t lastConnectionToken = 0;
+  bool egressWebsocketUpgrade = msg.isEgressWebsocketUpgrade();
+  bool hasUpgradeTokeninConnection = false;
+  auto headerEncoder = [&](HTTPHeaderCode code,
+                           folly::StringPiece header,
+                           folly::StringPiece value) {
+    if (code == HTTP_HEADER_CONTENT_LENGTH) {
+      deferredContentLength = value;
+      return;
+    } else if (code == HTTP_HEADER_CONNECTION &&
+               (!egressState_.is1xxResponse || egressWebsocketUpgrade)) {
+      static const std::string kClose = "close";
+      static const std::string kKeepAlive = "keep-alive";
+      folly::split(',', value, connectionTokens);
+      for (auto curConnectionToken = lastConnectionToken;
+           curConnectionToken < connectionTokens.size();
+           curConnectionToken++) {
+        auto token = trimWhitespace(connectionTokens[curConnectionToken]);
+        if (caseInsensitiveEqual(token, "upgrade")) {
+          hasUpgradeTokeninConnection = true;
+        }
+        if (caseInsensitiveEqual(token, kClose)) {
+          connectionState_.keepAlive = false;
+        } else if (!caseInsensitiveEqual(token, kKeepAlive)) {
+          connectionTokens[lastConnectionToken++] = token;
+        }
+      }
+      connectionTokens.resize(lastConnectionToken);
+
+      return;
+    } else if (code == HTTP_HEADER_UPGRADE) {
+      hasUpgradeHeader = true;
+      if (upstream) {
+        connectionState_.upgradeHeader = value.str();
+      }
+    } else if (!hasTransferEncodingChunked &&
+               code == HTTP_HEADER_TRANSFER_ENCODING) {
+      if (!caseInsensitiveEqual(value, kChunked)) {
+        return;
+      }
+      hasTransferEncodingChunked = true;
+      if (!egressState_.mayChunk) {
+        return;
+      }
+    } else if (!hasDateHeader && code == HTTP_HEADER_DATE) {
+      hasDateHeader = true;
+    } else if (egressWebsocketUpgrade &&
+               code == HTTP_HEADER_SEC_WEBSOCKET_KEY) {
+      return;
+    } else if (egressWebsocketUpgrade &&
+               code == HTTP_HEADER_SEC_WEBSOCKET_ACCEPT) {
+      return;
+    }
+    if (value.find_first_of("\r\n") != std::string::npos) {
+      return;
+    }
+    size_t lineLen = header.size() + value.size() + 4;
+    auto writable =
+        writeBuf.preallocate(lineLen, std::max(lineLen, size_t(2000)));
+    char* dst = (char*)writable.first;
+    memcpy(dst, header.data(), header.size());
+    dst += header.size();
+    *dst++ = ':';
+    *dst++ = ' ';
+    memcpy(dst, value.data(), value.size());
+    dst += value.size();
+    *dst++ = '\r';
+    *dst = '\n';
+    DCHECK_EQ(size_t(++dst - (char*)writable.first), lineLen);
+    writeBuf.postallocate(lineLen);
+    len += lineLen;
+  };
+  msg.getHeaders().forEachWithCode(headerEncoder);
+  if (extraHeaders) {
+    extraHeaders->forEachWithCode(headerEncoder);
+  }
+
+  bool bodyCheck = (downstream && !expectsNoResponseBody && !isUpgrade()) ||
+                   (upstream && ((msg.getMethod() == HTTPMethod::POST) ||
+                                 egressState_.chunked));
+
+  egressState_.chunked &= hasTransferEncodingChunked;
+  if (bodyCheck && !egressState_.chunked && deferredContentLength.empty()) {
+    if (!hasTransferEncodingChunked && egressState_.mayChunk) {
+      appendLiteral(writeBuf, len, "Transfer-Encoding: chunked\r\n");
+      egressState_.chunked = true;
+    } else {
+      connectionState_.keepAlive = false;
+    }
+  }
+  if (downstream && !hasDateHeader) {
+    addDateHeader(writeBuf, len);
+  }
+
+  if (msg.isEgressWebsocketUpgrade()) {
+    if (!hasUpgradeHeader) {
+      serializeWebsocketHeader(writeBuf, len, upstream);
+      if (!hasUpgradeTokeninConnection) {
+        connectionTokens.push_back(kUpgradeConnectionToken);
+        lastConnectionToken++;
+      }
+    } else {
+      LOG(ERROR) << folly::to<std::string>(
+          "Not serializing headers. "
+          "Upgrade headers present/txn: ",
+          hasUpgradeHeader,
+          txn);
+    }
+  }
+
+  if (!egressState_.is1xxResponse || upstream || !connectionTokens.empty()) {
+    appendLiteral(writeBuf, len, "Connection: ");
+    if (connectionTokens.size() > 0) {
+      appendString(writeBuf, len, folly::join(", ", connectionTokens));
+    }
+    if (!egressState_.is1xxResponse) {
+      if (connectionTokens.size() > 0) {
+        appendString(writeBuf, len, ", ");
+      }
+      if (connectionState_.keepAlive) {
+        appendLiteral(writeBuf, len, "keep-alive");
+      } else {
+        appendLiteral(writeBuf, len, "close");
+      }
+    }
+    appendString(writeBuf, len, CRLF);
+  }
+
+  if (!deferredContentLength.empty()) {
+    appendLiteral(writeBuf, len, "Content-Length: ");
+    appendString(writeBuf, len, deferredContentLength);
+    appendString(writeBuf, len, CRLF);
+  }
+  appendString(writeBuf, len, CRLF);
+  if (eom) {
+    len += generateEOM(writeBuf, txn);
+  }
+
+  if (size) {
+    size->compressed = len;
+    size->uncompressed = len;
+  }
 }
 
-size_t HTTP1xLlCodec::generateBody(folly::IOBufQueue& /*writeBuf*/,
-                                   StreamID /*txn*/,
-                                   std::unique_ptr<folly::IOBuf> /*chain*/,
+size_t HTTP1xLlCodec::generateBody(folly::IOBufQueue& writeBuf,
+                                   StreamID txn,
+                                   std::unique_ptr<folly::IOBuf> chain,
                                    folly::Optional<uint8_t> /*padding*/,
-                                   bool /*eom*/) {
-  return 0;
+                                   bool eom) {
+  DCHECK_EQ(txn, egressState_.txnID);
+  size_t buflen = 0;
+  size_t totLen = 0;
+  if (chain) {
+    buflen = chain->computeChainDataLength();
+    totLen = buflen;
+  }
+  if (totLen == 0) {
+    if (eom) {
+      totLen += generateEOM(writeBuf, txn);
+    }
+    return totLen;
+  }
+
+  if (egressState_.chunked && !egressState_.chunkOpen) {
+    char chunkLenBuf[32];
+    int rc = snprintf(chunkLenBuf, sizeof(chunkLenBuf), "%zx\r\n", buflen);
+    CHECK_GT(rc, 0);
+    CHECK_LT(size_t(rc), sizeof(chunkLenBuf));
+
+    writeBuf.append(chunkLenBuf, rc);
+    totLen += rc;
+
+    writeBuf.append(std::move(chain));
+    writeBuf.append(CRLF.data(), CRLF.size());
+    totLen += CRLF.size();
+  } else {
+    writeBuf.append(std::move(chain));
+  }
+  if (eom) {
+    totLen += generateEOM(writeBuf, txn);
+  }
+
+  return totLen;
 }
 
-size_t HTTP1xLlCodec::generateChunkHeader(folly::IOBufQueue& /*writeBuf*/,
+size_t HTTP1xLlCodec::generateChunkHeader(folly::IOBufQueue& writeBuf,
                                           StreamID /*txn*/,
-                                          size_t /*length*/) {
+                                          size_t length) {
+
+  CHECK(length) << "use sendEOM to terminate the message using the "
+                << "standard zero-length chunk. Don't "
+                << "send zero-length chunks using this API.";
+  if (egressState_.chunked) {
+    CHECK(!egressState_.chunkOpen);
+    egressState_.chunkOpen = true;
+    char chunkLenBuf[32];
+    int rc = snprintf(chunkLenBuf, sizeof(chunkLenBuf), "%zx\r\n", length);
+    CHECK_GT(rc, 0);
+    CHECK_LT(size_t(rc), sizeof(chunkLenBuf));
+
+    writeBuf.append(chunkLenBuf, rc);
+    return rc;
+  }
+
   return 0;
 }
 
-size_t HTTP1xLlCodec::generateChunkTerminator(folly::IOBufQueue& /*writeBuf*/,
+size_t HTTP1xLlCodec::generateChunkTerminator(folly::IOBufQueue& writeBuf,
                                               StreamID /*txn*/) {
+  if (egressState_.chunked && egressState_.chunkOpen) {
+    egressState_.chunkOpen = false;
+    writeBuf.append(CRLF.data(), CRLF.size());
+    return CRLF.size();
+  }
+
   return 0;
 }
 
-size_t HTTP1xLlCodec::generateTrailers(folly::IOBufQueue& /*writeBuf*/,
-                                       StreamID /*txn*/,
-                                       const HTTPHeaders& /*trailers*/) {
-  return 0;
+size_t HTTP1xLlCodec::generateTrailers(folly::IOBufQueue& writeBuf,
+                                       StreamID txn,
+                                       const HTTPHeaders& trailers) {
+  DCHECK_EQ(txn, egressState_.txnID);
+  size_t len = 0;
+  if (egressState_.chunked) {
+    CHECK(!egressState_.chunkOpen);
+    appendLiteral(writeBuf, len, "0\r\n");
+    egressState_.finalChunkWritten = true;
+    trailers.forEach([&](const std::string& trailer, const std::string& value) {
+      appendString(writeBuf, len, trailer);
+      appendLiteral(writeBuf, len, ": ");
+      appendString(writeBuf, len, value);
+      appendString(writeBuf, len, CRLF);
+    });
+    len += generateEOM(writeBuf, txn);
+  }
+  return len;
 }
 
-size_t HTTP1xLlCodec::generateEOM(folly::IOBufQueue& /*writeBuf*/,
-                                  StreamID /*txn*/) {
-  return 0;
+size_t HTTP1xLlCodec::generateEOM(folly::IOBufQueue& writeBuf, StreamID txn) {
+  DCHECK_EQ(txn, egressState_.txnID);
+  size_t len = 0;
+  if (egressState_.chunked) {
+    CHECK(!egressState_.chunkOpen);
+    if (connectionState_.headRequest && isDownstream(transportDirection_)) {
+      egressState_.finalChunkWritten = true;
+    } else {
+
+      if (!egressState_.finalChunkWritten) {
+        egressState_.finalChunkWritten = true;
+        appendLiteral(writeBuf, len, "0\r\n");
+      }
+      appendString(writeBuf, len, CRLF);
+    }
+  }
+  egressState_.messagePending = false;
+  return len;
 }
 
 size_t HTTP1xLlCodec::generateRstStream(folly::IOBufQueue& /*writeBuf*/,
                                         StreamID /*txn*/,
                                         ErrorCode /*statusCode*/) {
+
+  connectionState_.keepAlive = false;
   return 0;
 }
 
 size_t HTTP1xLlCodec::generateGoaway(folly::IOBufQueue&,
-                                     StreamID,
-                                     ErrorCode,
+                                     StreamID lastStream,
+                                     ErrorCode error,
                                      std::unique_ptr<folly::IOBuf>) {
+
+  if (isUpstream(transportDirection_) ||
+      connectionState_.disableKeepalivePending ||
+      lastStream != HTTPCodec::MaxStreamID || error != ErrorCode::NO_ERROR) {
+    connectionState_.keepAlive = false;
+  } else {
+    connectionState_.disableKeepalivePending = true;
+  }
   return 0;
 }
 
@@ -236,6 +684,7 @@ size_t HTTP1xLlCodec::generatePadding(folly::IOBufQueue&, StreamID, uint16_t) {
 size_t HTTP1xLlCodec::generateImmediateGoaway(folly::IOBufQueue&,
                                               ErrorCode,
                                               std::unique_ptr<folly::IOBuf>) {
+  connectionState_.keepAlive = false;
   return 0;
 }
 
