@@ -758,6 +758,38 @@ TEST_F(HTTPTransactionWebTransportTest, StopSendingThenAbort) {
   eventBase_.loopOnce();
 }
 
+TEST_F(HTTPTransactionWebTransportTest, StopSendingFailsPendingRead) {
+  auto wtImpl = dynamic_cast<WebTransportImpl*>(wt_);
+  ASSERT_NE(wtImpl, nullptr);
+  wtImpl->setUniStreamFlowControl(
+      /*maxStreamId=*/4,
+      /*targetConcurrentStreams=*/4);
+
+  WebTransport::StreamReadHandle* readHandle{nullptr};
+  EXPECT_CALL(handler_, onWebTransportUniStream(_, _))
+      .WillOnce(SaveArg<1>(&readHandle));
+
+  txn_->onWebTransportUniStream(2);
+  ASSERT_NE(readHandle, nullptr);
+
+  auto fut =
+      readHandle->readStreamData()
+          .via(&eventBase_)
+          .thenTry([](auto streamData) {
+            readCallback(std::move(streamData), true, 0, false, WT_APP_ERROR_2);
+          });
+  EXPECT_FALSE(fut.isReady());
+
+  EXPECT_CALL(transport_,
+              stopReadingWebTransportIngress(2, makeOpt(WT_APP_ERROR_2)))
+      .WillOnce(Return(folly::unit));
+  readHandle->stopSending(WT_APP_ERROR_2);
+  // The transport dropped the read callback, so the peer's RESET_STREAM
+  // cannot complete the read; stopSending must.
+  eventBase_.loopOnce();
+  EXPECT_TRUE(fut.isReady());
+}
+
 TEST_F(HTTPTransactionWebTransportTest, WriteBufferingBasic) {
   auto wtImpl = dynamic_cast<WebTransportImpl*>(wt_);
   ASSERT_NE(wtImpl, nullptr);
