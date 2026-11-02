@@ -76,11 +76,6 @@ class FakeStreamHandle
     if (!stopSendingErr_) {
       stopSendingErr_ = code;
     }
-    auto& ex = WebTransport::StreamWriteHandle::ex_;
-    if (!ex) {
-      ex = folly::make_exception_wrapper<WebTransport::Exception>(code);
-      WebTransport::StreamWriteHandle::cs_.requestCancellation();
-    }
     if (!writeErr_) {
       writeErr_.emplace(code);
     }
@@ -89,6 +84,12 @@ class FakeStreamHandle
     if (!fin_ && onWriteTerminal_) {
       auto cb = std::move(onWriteTerminal_);
       cb();
+    }
+    // Last: a synchronous peer reaction can destroy this handle.
+    auto& ex = WebTransport::StreamWriteHandle::ex_;
+    if (!ex) {
+      ex = folly::make_exception_wrapper<WebTransport::Exception>(code);
+      WebTransport::StreamWriteHandle::cs_.requestCancellation();
     }
     return folly::unit;
   }
@@ -239,6 +240,21 @@ class FakeStreamHandle
     WebTransport::StreamWriteHandle::cs_.requestCancellation();
     return folly::unit;
   }
+
+  // Simulate a peer RESET_STREAM on this read half. The writer's state stays as
+  // if it had not reset.
+  void deliverPeerReset(uint32_t err) {
+    if (promise_) {
+      promise_->setException(WebTransport::Exception(err));
+      promise_.reset();
+    }
+    writeErr_ = err;
+    if (!fin_ && onWriteTerminal_) {
+      auto cb = std::move(onWriteTerminal_);
+      cb();
+    }
+  }
+
   GenericApiRet setPriority(quic::PriorityQueue::Priority priority) override {
     quic::HTTPPriorityQueue::Priority httpPri(priority);
     pri.emplace(std::forward_as_tuple(
