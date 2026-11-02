@@ -810,6 +810,76 @@ TEST(HTTP1xCodecTest, TestBadTransferEncodingHeader) {
             "www.facebook.com");
 }
 
+// A request that arrives with both Transfer-Encoding: chunked and
+// Content-Length is framed by the former on ingress and re-chunked on egress,
+// so the Content-Length it carried must not go out with it (RFC 9112 section
+// 6.1): a backend that framed the body by Content-Length instead would parse
+// the tail of the chunked body as a second request.
+TEST(HTTP1xCodecTest, TestChunkedRequestWithContentLengthNotForwarded) {
+  HTTP1xCodec downstream(TransportDirection::DOWNSTREAM);
+  HTTP1xCodecCallback callbacks;
+  downstream.setCallback(&callbacks);
+
+  auto reqBuf = folly::IOBuf::copyBuffer(
+      "POST /upload HTTP/1.1\r\n"
+      "Host: www.facebook.com\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "Content-Length: 5\r\n"
+      "\r\n"
+      "5\r\nhello\r\n0\r\n\r\n");
+  downstream.onIngress(*reqBuf);
+  EXPECT_EQ(callbacks.errors, 0);
+  EXPECT_EQ(callbacks.headersComplete, 1);
+  EXPECT_EQ(callbacks.messageComplete, 1);
+  EXPECT_EQ(callbacks.bodyLen, 5);
+  ASSERT_NE(callbacks.msg_, nullptr);
+  EXPECT_TRUE(callbacks.msg_->getIsChunked());
+
+  HTTP1xCodec upstream(TransportDirection::UPSTREAM);
+  folly::IOBufQueue writeBuf(folly::IOBufQueue::cacheChainLength());
+  upstream.generateHeader(writeBuf, upstream.createStream(), *callbacks.msg_);
+  auto forwarded = writeBuf.move()->moveToFbString().toStdString();
+  EXPECT_THAT(forwarded, HasSubstr("Transfer-Encoding: chunked\r\n"));
+  EXPECT_THAT(forwarded, Not(HasSubstr("Content-Length")));
+}
+
+// Same for a response relayed to an HTTP/1.1 client.
+TEST(HTTP1xCodecTest, TestChunkedResponseWithContentLengthNotForwarded) {
+  HTTP1xCodec upstream(TransportDirection::UPSTREAM);
+  HTTP1xCodecCallback callbacks;
+  upstream.setCallback(&callbacks);
+  folly::IOBufQueue writeBuf(folly::IOBufQueue::cacheChainLength());
+  upstream.generateHeader(
+      writeBuf, upstream.createStream(), getGetRequest("/foo"));
+
+  auto respBuf = folly::IOBuf::copyBuffer(
+      "HTTP/1.1 200 OK\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "Content-Length: 5\r\n"
+      "\r\n"
+      "5\r\nhello\r\n0\r\n\r\n");
+  upstream.onIngress(*respBuf);
+  EXPECT_EQ(callbacks.errors, 0);
+  EXPECT_EQ(callbacks.headersComplete, 1);
+  EXPECT_EQ(callbacks.messageComplete, 1);
+  EXPECT_EQ(callbacks.bodyLen, 5);
+  ASSERT_NE(callbacks.msg_, nullptr);
+
+  // The client-facing codec has to have seen an HTTP/1.1 request to be allowed
+  // to send a chunked response.
+  HTTP1xCodec downstream(TransportDirection::DOWNSTREAM);
+  HTTP1xCodecCallback downstreamCallbacks;
+  downstream.setCallback(&downstreamCallbacks);
+  downstream.onIngress(*getSimpleRequestData());
+  EXPECT_EQ(downstreamCallbacks.headersComplete, 1);
+
+  writeBuf.move();
+  downstream.generateHeader(writeBuf, 1, *callbacks.msg_);
+  auto relayed = writeBuf.move()->moveToFbString().toStdString();
+  EXPECT_THAT(relayed, HasSubstr("Transfer-Encoding: chunked\r\n"));
+  EXPECT_THAT(relayed, Not(HasSubstr("Content-Length")));
+}
+
 // url_ accumulates per message, so a rejection on a pipelined request must
 // report that request's URL rather than one carried over from its predecessor.
 TEST(HTTP1xCodecTest, TestPartialMsgBackfilledForPipelinedRequest) {

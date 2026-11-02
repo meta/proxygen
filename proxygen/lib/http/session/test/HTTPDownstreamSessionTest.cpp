@@ -3513,15 +3513,20 @@ TEST_F(HTTP2DownstreamSessionTest, Test304ContentLength) {
 // chunked with wrong content-length
 TEST_F(HTTPDownstreamSessionTest, HttpShortContentLength) {
   InSequence enforceOrder;
-  auto req = getPostRequest(10);
-  req.setIsChunked(true);
-  req.getHeaders().add(HTTP_HEADER_TRANSFER_ENCODING, "chunked");
-  auto streamID = sendRequest(req, false);
-  clientCodec_->generateChunkHeader(requests_, streamID, 20);
-  clientCodec_->generateBody(
-      requests_, streamID, makeBuf(20), HTTPCodec::NoPadding, false);
-  clientCodec_->generateChunkTerminator(requests_, streamID);
-  clientCodec_->generateEOM(requests_, streamID);
+  // Written out by hand: HTTP1xCodec does not send Content-Length alongside
+  // Transfer-Encoding: chunked, so clientCodec_ cannot produce this request.
+  string req = folly::to<string>(
+      "POST / HTTP/1.1\r\n"
+      "Host: www.foo.com\r\n"
+      "Content-Length: 10\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "\r\n"
+      "14\r\n",
+      string(20, 'a'),
+      "\r\n"
+      "0\r\n"
+      "\r\n");
+  requests_.append(req.data(), req.size());
   auto handler1 = addSimpleStrictHandler();
 
   handler1->expectHeaders();

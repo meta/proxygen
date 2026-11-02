@@ -766,7 +766,13 @@ void HTTP1xCodec::generateHeader(
     appendLiteral(writeBuf, len, "\r\n");
   }
 
-  if (!deferredContentLength.empty()) {
+  // A message sent with Transfer-Encoding must not also carry Content-Length
+  // (RFC 9112 section 6.1): the body goes out chunked, so a peer framing it
+  // by Content-Length instead would read the chunk headers as body bytes and
+  // parse whatever follows as another message.
+  const bool sentTransferEncodingChunked =
+      hasTransferEncodingChunked && mayChunkEgress_;
+  if (!deferredContentLength.empty() && !sentTransferEncodingChunked) {
     appendLiteral(writeBuf, len, "Content-Length: ");
     appendString(writeBuf, len, deferredContentLength);
     appendString(writeBuf, len, CRLF);
