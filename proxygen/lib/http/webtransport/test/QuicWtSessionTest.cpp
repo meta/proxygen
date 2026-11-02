@@ -846,6 +846,27 @@ TEST_F(QuicWtSessionTest, WriteFlowControlBlocked) {
   EXPECT_TRUE(stream.writeEOF);
 }
 
+TEST_F(QuicWtSessionTest, WriteRefreshesStaleFlowControl) {
+  auto handle = session_->createUniStream();
+  ASSERT_TRUE(handle.hasValue());
+  const auto id = handle.value()->getID();
+  socketDriver_.setConnectionFlowControlWindow(
+      std::numeric_limits<uint64_t>::max());
+
+  // Peer raised MAX_STREAM_DATA after creation; the cached window is stale.
+  constexpr size_t kDataLength = 65'537;
+  socketDriver_.setStreamFlowControlWindow(id, kDataLength);
+
+  handle.value()->writeStreamData(
+      folly::IOBuf::copyBuffer(std::string(kDataLength, 'a')), true, nullptr);
+  eventBase_.loopOnce();
+
+  auto& stream = socketDriver_.streams_[id];
+  EXPECT_EQ(stream.writeBuf.chainLength(), kDataLength);
+  EXPECT_TRUE(stream.writeEOF);
+  EXPECT_EQ(stream.pendingWriteCb.stream, nullptr);
+}
+
 /**
  * Unsure if the following is possible in production (i.e. QuicTransportBase) --
  * but it tests when a ::writeChain fails without a prior ::readError or
