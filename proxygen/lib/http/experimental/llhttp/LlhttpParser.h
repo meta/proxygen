@@ -100,6 +100,9 @@ class LlhttpParser {
   [[nodiscard]] uint16_t statusCode() const {
     return parser_.status_code;
   }
+  void setStatusCode(uint16_t status) {
+    parser_.status_code = status;
+  }
   [[nodiscard]] const char* methodStr() const;
   [[nodiscard]] bool isChunked() const {
     return (parser_.flags & F_CHUNKED) != 0;

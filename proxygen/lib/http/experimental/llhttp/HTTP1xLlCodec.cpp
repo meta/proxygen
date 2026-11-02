@@ -174,13 +174,24 @@ size_t HTTP1xLlCodec::onIngressImpl(const folly::IOBuf& buf) {
     ingressState_.buf = &buf;
     if (isUpstream(transportDirection_) && parser_->httpMajor() == 0 &&
         parser_->httpMinor() == 9) {
-      // Handle HTTP/0.9 ?
+      // HTTP/0.9 responses have no header block, so create a fake 200 response
+      // and put the codec in upgrade mode
+      onMessageBegin();
+      parser_->setStatusCode(200);
+      onHeadersComplete();
+      connectionState_.upgradePhase = UpgradePhase::UPGRADED;
+      ingressState_.parseState = ParseState::kUpgraded;
+      return onIngressImpl(buf);
     }
     // Callers responsibility to prevent calling onIngress from a callback
     CHECK(!parser_->isActive());
     const char* data = (const char*)buf.data();
     const size_t len = buf.length();
     size_t bytesParsed = parser_->execute(data, len);
+    if (ingressState_.http09Request && !isParserError() &&
+        (parser_->isPaused() || data[len - 1] == '\n')) {
+      endHttp09RequestLine();
+    }
     resumeDeclinedUpgrade();
     if (isParserError()) {
       onParserError();
@@ -789,6 +800,7 @@ const llhttp_settings_t* HTTP1xLlCodec::getParserSettings() {
     value.on_message_begin = onMessageBeginCB;
     value.on_protocol = onProtocolCB;
     value.on_url = onURLCB;
+    value.on_url_complete = onURLCompleteCB;
     value.on_status = onStatusCB;
     value.on_header_field = onHeaderFieldCB;
     value.on_header_value = onHeaderValueCB;
@@ -825,6 +837,14 @@ int HTTP1xLlCodec::onURL(const char* buf, size_t len) {
     return rc;
   }
   ingressState_.url.append(buf, len);
+  // A request line ending right after the URL is HTTP/0.9
+  const char* urlEnd = buf + len;
+  const char* bufEnd =
+      reinterpret_cast<const char*>(ingressState_.buf->data()) +
+      ingressState_.buf->length();
+  if (urlEnd < bufEnd && (*urlEnd == '\r' || *urlEnd == '\n')) {
+    ingressState_.http09Request = true;
+  }
   return 0;
 }
 
@@ -835,12 +855,24 @@ int HTTP1xLlCodec::onProtocol(const char* buf, size_t len) {
   return 0;
 }
 
+int HTTP1xLlCodec::onURLComplete() {
+  return ingressState_.http09Request ? HPE_PAUSED : 0;
+}
+
 int HTTP1xLlCodec::onStatus(const char* buf, size_t len) {
   if (int rc = trackHeaderBytes(len)) {
     return rc;
   }
   ingressState_.reason.append(buf, len);
   return 0;
+}
+
+void HTTP1xLlCodec::endHttp09RequestLine() {
+  // HTTP/0.9 requests have no header block, but llhttp parses one after the
+  // request line, so give it an empty one instead of the bytes that follow
+  ingressState_.http09Request = false;
+  parser_->resume();
+  parser_->execute(CRLF.data(), CRLF.size());
 }
 
 int HTTP1xLlCodec::trackHeaderBytes(size_t len) {
@@ -1142,6 +1174,16 @@ int HTTP1xLlCodec::onURLCB(llhttp_t* parser, const char* data, size_t len) {
   auto* codec = getCodec(parser);
   try {
     return codec->onURL(data, len);
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
+    return -1;
+  }
+}
+
+int HTTP1xLlCodec::onURLCompleteCB(llhttp_t* parser) {
+  auto* codec = getCodec(parser);
+  try {
+    return codec->onURLComplete();
   } catch (const std::exception& ex) {
     codec->ingressState_.errorMessage = ex.what();
     return -1;
