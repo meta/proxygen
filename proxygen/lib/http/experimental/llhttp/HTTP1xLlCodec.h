@@ -142,6 +142,8 @@ class HTTP1xLlCodec : public HTTPCodec {
     std::string headerValue;
     std::string url;
     std::string reason;
+    std::string errorContext;
+    std::string errorMessage;
     HTTPHeaderSize headerSize;
 
     ParseState parseState{kIdle};
@@ -155,6 +157,8 @@ class HTTP1xLlCodec : public HTTPCodec {
       headerSize.uncompressed = 0;
       headerSize.compressed = 0;
       url.clear();
+      errorContext.clear();
+      errorMessage.clear();
       msg = std::make_unique<HTTPMessage>();
       trailers.reset();
       parseState = ParseState::kHeaders;
@@ -239,6 +243,9 @@ class HTTP1xLlCodec : public HTTPCodec {
   }
   void pushHeaderNameAndValue(HTTPHeaders& hdrs);
   int trackHeaderBytes(size_t len);
+  void onParserError();
+  void backfillPartialRequest();
+  int setErrorContext(std::string context);
   bool validateTransferEncoding(const HTTPHeaders& hdrs) noexcept;
   void addDateHeader(folly::IOBufQueue& writeBuf, size_t& len);
   [[nodiscard]] std::string generateWebsocketKey() const;

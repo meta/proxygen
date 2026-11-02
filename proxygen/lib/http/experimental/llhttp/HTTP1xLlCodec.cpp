@@ -56,6 +56,16 @@ void appendString(folly::IOBufQueue& queue,
   queue.append(str.data(), str.size());
   len += str.size();
 }
+
+bool hasUserInfo(std::string_view url) {
+  auto start = url.find("://");
+  if (start == std::string_view::npos) {
+    return false;
+  }
+  start += 3;
+  auto end = url.find_first_of("/?#", start);
+  return url.substr(start, end - start).find('@') != std::string_view::npos;
+}
 } // namespace
 
 namespace proxygen {
@@ -172,6 +182,9 @@ size_t HTTP1xLlCodec::onIngressImpl(const folly::IOBuf& buf) {
     const size_t len = buf.length();
     size_t bytesParsed = parser_->execute(data, len);
     resumeDeclinedUpgrade();
+    if (isParserError()) {
+      onParserError();
+    }
     if (isHeaderNameEmpty() && !isHeaderPieceEmpty()) {
       ingressState_.headerName = ingressState_.headerNamePiece.str();
     }
@@ -185,6 +198,9 @@ size_t HTTP1xLlCodec::onIngressImpl(const folly::IOBuf& buf) {
 }
 
 void HTTP1xLlCodec::onIngressEOF() {
+  if (isParserError()) {
+    return;
+  }
   if (parser_->isActive()) {
     ingressState_.awaitingEOF = true;
     return;
@@ -197,6 +213,70 @@ void HTTP1xLlCodec::onIngressEOF() {
     return;
   }
   parser_->finish();
+  if (isParserError()) {
+    onParserError();
+  }
+}
+
+void HTTP1xLlCodec::backfillPartialRequest() {
+  if (ingressState_.url.empty()) {
+    return;
+  }
+  ingressState_.msg->setIngressHeaderSize(ingressState_.headerSize);
+  ingressState_.msg->setHTTPVersion(parser_->httpMajor(), parser_->httpMinor());
+  ingressState_.msg->setMethod(parser_->methodStr());
+  ingressState_.msg->setURL(ingressState_.url, /*strict=*/false);
+}
+
+void HTTP1xLlCodec::onParserError() {
+  const llhttp_errno_t err = parser_->error();
+  std::string errorMsg;
+  if (!ingressState_.errorMessage.empty()) {
+    errorMsg = ingressState_.errorMessage;
+  } else {
+    const char* reason = parser_->errorReason();
+    errorMsg = folly::to<std::string>("Error parsing message: ",
+                                      llhttp_errno_name(err),
+                                      " ",
+                                      reason ? reason : "");
+  }
+  if (ingressState_.errorContext.empty()) {
+    ingressState_.errorContext = facebook::detail::llhttpErrToContext(err);
+  }
+  if (!ingressState_.errorContext.empty()) {
+    errorMsg = folly::to<std::string>(
+        errorMsg, " [Context]=", ingressState_.errorContext);
+  }
+  HTTPException error(HTTPException::Direction::INGRESS, errorMsg);
+  if (!ingressState_.errorContext.empty()) {
+    error.setContext(ingressState_.errorContext);
+  }
+
+  if (ingressState_.msg) {
+    backfillPartialRequest();
+    if (ingressState_.msg->isRequest() || ingressState_.msg->isResponse()) {
+      error.setPartialMsg(std::move(ingressState_.msg));
+    }
+  }
+  if (isDownstream(transportDirection_) &&
+      egressState_.txnID < ingressState_.txnID) {
+    error.setHttpStatusCode(400);
+  }
+  if (err == HPE_INVALID_EOF_STATE) {
+    error.setProxygenError(kErrorEOF);
+  } else if (isParsingHeaders()) {
+    error.setProxygenError(kErrorParseHeader);
+  } else if (isBody() || isParsingTrailers()) {
+    error.setProxygenError(kErrorParseBody);
+  } else {
+    error.setProxygenError(kErrorUnknown);
+  }
+  callback_->onError(ingressState_.txnID, error);
+}
+
+int HTTP1xLlCodec::setErrorContext(std::string context) {
+  ingressState_.errorContext = std::move(context);
+  return -1;
 }
 
 bool HTTP1xLlCodec::isReusable() const {
@@ -750,7 +830,7 @@ int HTTP1xLlCodec::onURL(const char* buf, size_t len) {
 
 int HTTP1xLlCodec::onProtocol(const char* buf, size_t len) {
   if (!kHttpProtocol.contains(folly::StringPiece(buf, len))) {
-    return -1;
+    return setErrorContext("invalid-protocol");
   }
   return 0;
 }
@@ -767,7 +847,7 @@ int HTTP1xLlCodec::trackHeaderBytes(size_t len) {
   ingressState_.headerSize.compressed += len;
   ingressState_.headerSize.uncompressed += len;
   if (ingressState_.headerSize.compressed > kHeaderByteCap) {
-    return -1;
+    return setErrorContext("header-overflow");
   }
   return 0;
 }
@@ -824,10 +904,10 @@ int HTTP1xLlCodec::onHeaderValueComplete() {
 int HTTP1xLlCodec::onHeadersComplete() {
   HTTPHeaders& hdrs = ingressState_.msg->getHeaders();
   if (!validateTransferEncoding(hdrs)) {
-    return -1;
+    return setErrorContext("invalid-transfer-encoding");
   }
   if (parser_->contentLength() > kMaxDataSize) {
-    return -1;
+    return setErrorContext("content-length-exceeds-max-limit");
   }
 
   ingressState_.msg->setIngressHeaderSize(ingressState_.headerSize);
@@ -843,8 +923,19 @@ int HTTP1xLlCodec::onHeadersComplete() {
     connectionState_.headRequest =
         ingressState_.msg->getMethod() == HTTPMethod::HEAD;
 
-    ParseURL parseUrl = ingressState_.msg->setURL(std::move(ingressState_.url));
+    ParseURL parseUrl = ingressState_.msg->setURL(std::move(ingressState_.url),
+                                                  /*strict=*/true);
     ingressState_.url.clear();
+    if (!parseUrl.valid()) {
+      // The query is where a URL carries its credentials
+      LOG(ERROR)
+          << "Invalid URL: "
+          << CodecUtil::stripQueryAndFragment(ingressState_.msg->getURL());
+      return setErrorContext("invalid-url");
+    }
+    if (parseUrl.hasHost() && hasUserInfo(ingressState_.msg->getURL())) {
+      return setErrorContext("url-userinfo");
+    }
     if (parseUrl.hasHost()) {
       auto hostAndPort = parseUrl.hostAndPort();
       VLOG(4) << "Adding inferred host header: " << hostAndPort;
@@ -874,7 +965,7 @@ int HTTP1xLlCodec::onHeadersComplete() {
                       "client="
                    << connectionState_.upgradeHeader
                    << " server=" << serverUpgrade;
-        return -1;
+        return setErrorContext("client-server-upgrade-mismatch");
       }
       connectionState_.upgradePhase = UpgradePhase::UPGRADED;
     } else if (isUpgradePending() && parser_->statusCode() >= 200) {
@@ -909,14 +1000,14 @@ int HTTP1xLlCodec::onHeadersComplete() {
         LOG(ERROR)
             << "Mismatch in expected ws accept key: " << "upstream: " << accept
             << " expected: " << connectionState_.websocketAccept;
-        return -1;
+        return setErrorContext("websocket-accept-key-mismatch");
       }
     } else if (upgradeRequest) {
       ingressState_.msg->setIngressWebsocketUpgrade();
       if (!connectionState_.websocketAccept.empty()) {
         LOG(ERROR) << "ws accept key already set: '"
                    << connectionState_.websocketAccept << "'";
-        return -1;
+        return setErrorContext("websocket-accept-key-already-set");
       }
       auto key = hdrs.getSingleOrEmpty(HTTP_HEADER_SEC_WEBSOCKET_KEY);
       connectionState_.websocketAccept = generateWebsocketAccept(key);
@@ -981,7 +1072,7 @@ int HTTP1xLlCodec::onBody(const char* buf, size_t len) {
 int HTTP1xLlCodec::onChunkHeader() {
   auto len = parser_->contentLength();
   if (len > kMaxDataSize) {
-    return -1;
+    return setErrorContext("chunk-size-exceeds-max-limit");
   }
   if (len == 0) {
     ingressState_.parseState = ParseState::kTrailers;
@@ -1028,9 +1119,11 @@ int HTTP1xLlCodec::onMessageComplete() {
 }
 
 int HTTP1xLlCodec::onMessageBeginCB(llhttp_t* parser) {
+  auto* codec = getCodec(parser);
   try {
-    return getCodec(parser)->onMessageBegin();
-  } catch (const std::exception&) {
+    return codec->onMessageBegin();
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }
@@ -1046,17 +1139,21 @@ int HTTP1xLlCodec::onProtocolCB(llhttp_t* parser,
 }
 
 int HTTP1xLlCodec::onURLCB(llhttp_t* parser, const char* data, size_t len) {
+  auto* codec = getCodec(parser);
   try {
-    return getCodec(parser)->onURL(data, len);
-  } catch (const std::exception&) {
+    return codec->onURL(data, len);
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }
 
 int HTTP1xLlCodec::onStatusCB(llhttp_t* parser, const char* data, size_t len) {
+  auto* codec = getCodec(parser);
   try {
-    return getCodec(parser)->onStatus(data, len);
-  } catch (const std::exception&) {
+    return codec->onStatus(data, len);
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }
@@ -1064,9 +1161,11 @@ int HTTP1xLlCodec::onStatusCB(llhttp_t* parser, const char* data, size_t len) {
 int HTTP1xLlCodec::onHeaderFieldCB(llhttp_t* parser,
                                    const char* data,
                                    size_t len) {
+  auto* codec = getCodec(parser);
   try {
-    return getCodec(parser)->onHeaderField(data, len);
-  } catch (const std::exception&) {
+    return codec->onHeaderField(data, len);
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }
@@ -1074,17 +1173,21 @@ int HTTP1xLlCodec::onHeaderFieldCB(llhttp_t* parser,
 int HTTP1xLlCodec::onHeaderValueCB(llhttp_t* parser,
                                    const char* data,
                                    size_t len) {
+  auto* codec = getCodec(parser);
   try {
-    return getCodec(parser)->onHeaderValue(data, len);
-  } catch (const std::exception&) {
+    return codec->onHeaderValue(data, len);
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }
 
 int HTTP1xLlCodec::onHeaderValueCompleteCB(llhttp_t* parser) {
+  auto* codec = getCodec(parser);
   try {
-    return getCodec(parser)->onHeaderValueComplete();
-  } catch (const std::exception&) {
+    return codec->onHeaderValueComplete();
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }
@@ -1093,39 +1196,48 @@ int HTTP1xLlCodec::onHeadersCompleteCB(llhttp_t* parser) {
   auto* codec = getCodec(parser);
   try {
     return codec->onHeadersComplete();
-  } catch (const std::exception&) {
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }
 
 int HTTP1xLlCodec::onBodyCB(llhttp_t* parser, const char* data, size_t len) {
+  auto* codec = getCodec(parser);
   try {
-    return getCodec(parser)->onBody(data, len);
-  } catch (const std::exception&) {
+    return codec->onBody(data, len);
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }
 
 int HTTP1xLlCodec::onChunkHeaderCB(llhttp_t* parser) {
+  auto* codec = getCodec(parser);
   try {
-    return getCodec(parser)->onChunkHeader();
-  } catch (const std::exception&) {
+    return codec->onChunkHeader();
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }
 
 int HTTP1xLlCodec::onChunkCompleteCB(llhttp_t* parser) {
+  auto* codec = getCodec(parser);
   try {
-    return getCodec(parser)->onChunkComplete();
-  } catch (const std::exception&) {
+    return codec->onChunkComplete();
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }
 
 int HTTP1xLlCodec::onMessageCompleteCB(llhttp_t* parser) {
+  auto* codec = getCodec(parser);
   try {
-    return getCodec(parser)->onMessageComplete();
-  } catch (const std::exception&) {
+    return codec->onMessageComplete();
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
     return -1;
   }
 }

@@ -95,4 +95,47 @@ const char* LlhttpParser::methodStr() const {
   return llhttp_method_name(static_cast<llhttp_method_t>(parser_.method));
 }
 
+const char* llhttpErrToContext(llhttp_errno_t err) {
+  switch (err) {
+    case HPE_INTERNAL:
+      return "internal";
+    case HPE_STRICT:
+      return "strict";
+    case HPE_LF_EXPECTED:
+      return "lf-expected";
+    case HPE_CR_EXPECTED:
+      return "cr-expected";
+    case HPE_UNEXPECTED_SPACE:
+      return "unexpected-space";
+    case HPE_UNEXPECTED_CONTENT_LENGTH:
+      return "unexpected-content-length";
+    case HPE_CLOSED_CONNECTION:
+      return "closed-connection";
+    case HPE_INVALID_METHOD:
+      return "invalid-method";
+    case HPE_INVALID_URL:
+      return "invalid-url";
+    case HPE_INVALID_CONSTANT:
+      return "invalid-constant";
+    case HPE_INVALID_VERSION:
+      return "invalid-version";
+    case HPE_INVALID_HEADER_TOKEN:
+      return "invalid-header-token";
+    case HPE_INVALID_CONTENT_LENGTH:
+      return "invalid-content-length";
+    case HPE_INVALID_CHUNK_SIZE:
+      return "invalid-chunk-size";
+    case HPE_INVALID_STATUS:
+      return "invalid-status";
+    case HPE_INVALID_EOF_STATE:
+      return "invalid-eof-state";
+    case HPE_INVALID_TRANSFER_ENCODING:
+      return "invalid-transfer-encoding";
+    case HPE_PAUSED_H2_UPGRADE:
+      return "h2-upgrade";
+    default:
+      return "";
+  }
+}
+
 } // namespace facebook::detail

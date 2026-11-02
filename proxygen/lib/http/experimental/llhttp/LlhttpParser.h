@@ -116,4 +116,6 @@ class LlhttpParser {
   bool active_{false};
 };
 
+const char* llhttpErrToContext(llhttp_errno_t err);
+
 } // namespace facebook::detail
