@@ -94,6 +94,7 @@ class HTTP1xLlCodec : public HTTPCodec {
  private:
   [[nodiscard]] bool isEgressBusy() const;
   int onMessageBegin();
+  int onProtocol(const char* data, size_t len);
   int onURL(const char* data, size_t len);
   int onStatus(const char* data, size_t len);
   int onHeaderField(const char* data, size_t len);
@@ -107,6 +108,7 @@ class HTTP1xLlCodec : public HTTPCodec {
 
   // LlHttpParser Callbacks
   static int onMessageBeginCB(llhttp_t* parser);
+  static int onProtocolCB(llhttp_t* parser, const char* data, size_t len);
   static int onURLCB(llhttp_t* parser, const char* data, size_t len);
   static int onStatusCB(llhttp_t* parser, const char* data, size_t len);
   static int onHeaderFieldCB(llhttp_t* parser, const char* data, size_t len);
@@ -204,6 +206,7 @@ class HTTP1xLlCodec : public HTTPCodec {
   ConnectionState connectionState_;
 
   // Helper Methods
+  void resumeDeclinedUpgrade();
   [[nodiscard]] bool isParsingHeaders() const {
     return ingressState_.parseState == ParseState::kHeaders;
   }

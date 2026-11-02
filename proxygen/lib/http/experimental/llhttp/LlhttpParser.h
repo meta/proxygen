@@ -62,6 +62,14 @@ class LlhttpParser {
   void pause();
   void resume();
   void resumeAfterUpgrade();
+  [[nodiscard]] bool isUpgrade() const {
+    return parser_.upgrade != 0;
+  }
+  // What returning 2 from on_headers_complete does
+  void markUpgrade() {
+    parser_.upgrade = 1;
+    parser_.flags |= F_SKIPBODY;
+  }
 
   [[nodiscard]] llhttp_errno_t error() const {
     return static_cast<llhttp_errno_t>(parser_.error);
