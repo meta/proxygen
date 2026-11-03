@@ -8,9 +8,11 @@
 
 #pragma once
 
+#include <algorithm>
 #include <deque>
 #include <folly/CancellationToken.h>
 #include <folly/ExceptionWrapper.h>
+#include <folly/Executor.h>
 #include <folly/container/F14Set.h>
 #include <folly/portability/GMock.h>
 #include <proxygen/lib/http/webtransport/WebTransport.h>
@@ -25,7 +27,8 @@ using GenericApiRet = folly::Expected<folly::Unit, WebTransport::ErrorCode>;
 // from one are delivered as reads to the other.
 class FakeStreamHandle
     : public WebTransport::StreamReadHandle
-    , public WebTransport::StreamWriteHandle {
+    , public WebTransport::StreamWriteHandle
+    , public std::enable_shared_from_this<FakeStreamHandle> {
  public:
   explicit FakeStreamHandle(uint64_t inId)
       : WebTransport::StreamReadHandle(inId),
@@ -140,15 +143,34 @@ class FakeStreamHandle
           .data = takeReadData(), .fin = fin_ && inflightBuf_.empty()});
       promise_.reset();
     }
+    fireDeliveryCallbacks();
+  }
+
+  void setDeliveryExecutor(folly::Executor* executor) {
+    deliveryExecutor_ = executor;
+  }
+
+  // A callback can close the session, so acked entries leave the map before
+  // any of them runs.
+  void fireDeliveryCallbacks() {
+    auto self = shared_from_this();
+    std::vector<std::pair<uint64_t, WebTransport::ByteEventCallback*>> acked;
     for (auto it = offsetToDeliveryCallback_.begin();
          it != offsetToDeliveryCallback_.end();) {
       if (it->first > dataDelivered_) {
-        break;
+        ++it;
+        continue;
       }
-      for (auto& deliveryCallback : it->second) {
-        deliveryCallback->onByteEvent(getID(), it->first);
+      for (auto* callback : it->second) {
+        acked.emplace_back(it->first, callback);
       }
       it = offsetToDeliveryCallback_.erase(it);
+    }
+    std::stable_sort(acked.begin(), acked.end(), [](auto& a, auto& b) {
+      return a.first < b.first;
+    });
+    for (auto& [offset, callback] : acked) {
+      callback->onByteEvent(getID(), offset);
     }
   }
 
@@ -199,10 +221,17 @@ class FakeStreamHandle
     }
 
     if (deliveryCallback) {
-      if (immediateDelivery_) {
+      if (immediateDelivery_ && !deliveryExecutor_) {
         deliveryCallback->onByteEvent(getID(), dataWritten_);
       } else {
         offsetToDeliveryCallback_[dataWritten_].push_back(deliveryCallback);
+      }
+      if (immediateDelivery_ && deliveryExecutor_) {
+        deliveryExecutor_->add([weak = weak_from_this()] {
+          if (auto self = weak.lock()) {
+            self->fireDeliveryCallbacks();
+          }
+        });
       }
     }
     if (fin && !wasTerminal && onWriteTerminal_) {
@@ -251,13 +280,19 @@ class FakeStreamHandle
     return writablePromises_.size();
   }
 
-  GenericApiRet resetStream(uint32_t err) override {
-    resetCount_++;
-    for (auto& [offset, deliveryCallback] : offsetToDeliveryCallback_) {
+  // Every registration ends in exactly one onByteEvent or onByteEventCanceled.
+  void cancelDeliveryCallbacks() {
+    auto callbacks = std::exchange(offsetToDeliveryCallback_, {});
+    for (auto& [offset, deliveryCallback] : callbacks) {
       for (auto& callback : deliveryCallback) {
         callback->onByteEventCanceled(getID(), offset);
       }
     }
+  }
+
+  GenericApiRet resetStream(uint32_t err) override {
+    resetCount_++;
+    cancelDeliveryCallbacks();
 
     writeErr_ = err;
 
@@ -337,6 +372,7 @@ class FakeStreamHandle
   folly::IOBufQueue inflightBuf_{folly::IOBufQueue::cacheChainLength()};
   folly::F14FastMap<uint64_t, std::vector<WebTransport::ByteEventCallback*>>
       offsetToDeliveryCallback_;
+  folly::Executor* deliveryExecutor_{nullptr};
 };
 
 // Implementation of WebTransport for testing two connected endpoints.
@@ -365,6 +401,9 @@ class FakeSharedWebTransport : public WebTransport {
   }
   FakeSharedWebTransport() = default;
   ~FakeSharedWebTransport() override {
+    for (auto& h : writeHandles) {
+      h.second->cancelDeliveryCallbacks();
+    }
     writeHandles.clear();
     readHandles.clear();
   }
@@ -397,6 +436,7 @@ class FakeSharedWebTransport : public WebTransport {
     nextUniStreamId_ += 4;
     auto handle = std::make_shared<FakeStreamHandle>(id);
     handle->setImmediateDelivery(!deferNewStreamData_);
+    handle->setDeliveryExecutor(deliveryExecutor_);
     handle->setWritable(newStreamsWritable_);
     writeHandles.emplace(id, handle);
     peer_->readHandles.emplace(id, handle);
@@ -420,6 +460,8 @@ class FakeSharedWebTransport : public WebTransport {
     auto readH = std::make_shared<FakeStreamHandle>(id);
     auto writeH = std::make_shared<FakeStreamHandle>(id);
     writeH->setImmediateDelivery(!deferNewStreamData_);
+    writeH->setDeliveryExecutor(deliveryExecutor_);
+    readH->setDeliveryExecutor(peer_->deliveryExecutor_);
     readHandles.emplace(id, readH);
     writeHandles.emplace(id, writeH);
     peer_->readHandles.emplace(id, writeH);
@@ -470,6 +512,11 @@ class FakeSharedWebTransport : public WebTransport {
   // choose the order in which the peer sees each stream.
   void setDeferNewStreamData(bool defer) {
     deferNewStreamData_ = defer;
+  }
+  // Write handles created afterwards ack immediately delivered writes from the
+  // executor, as a real transport acks after the write returns.
+  void setDeliveryExecutor(folly::Executor* executor) {
+    deliveryExecutor_ = executor;
   }
   // Uni streams created afterwards start with awaitWritable() pending until
   // the test calls setWritable(true) on their write handle.
@@ -643,6 +690,8 @@ class FakeSharedWebTransport : public WebTransport {
     for (auto& h : writeHandles) {
       if (h.second->open()) {
         h.second->resetStream(closeCode);
+      } else {
+        h.second->cancelDeliveryCallbacks();
       }
     }
     writeHandles.clear();
@@ -708,6 +757,7 @@ class FakeSharedWebTransport : public WebTransport {
   size_t uniCreditWaitCalls_{0};
   folly::Optional<ErrorCode> nextCreateBidiStreamError_;
   bool deferNewStreamData_{false};
+  folly::Executor* deliveryExecutor_{nullptr};
   bool newStreamsWritable_{true};
 };
 
