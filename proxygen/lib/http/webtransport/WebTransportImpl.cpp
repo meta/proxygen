@@ -327,6 +327,7 @@ void WebTransportImpl::onWebTransportStopSending(HTTPCodec::StreamID id,
 }
 
 void WebTransportImpl::StreamWriteHandle::onStopSending(uint32_t errorCode) {
+  auto cancelWrites = detachBufferedWrites();
   // The caller already decodes errorCode, if necessary
   if (writePromise_.valid()) {
     writePromise_.setException(WebTransport::Exception(errorCode));
@@ -336,6 +337,24 @@ void WebTransportImpl::StreamWriteHandle::onStopSending(uint32_t errorCode) {
   }
 
   cs_.requestCancellation();
+  cancelWrites();
+}
+
+folly::Function<void()>
+WebTransportImpl::StreamWriteHandle::detachBufferedWrites() {
+  // The returned function does not touch this handle, which a delivery
+  // callback can destroy.
+  return [writes = std::exchange(bufferedWrites_, {}),
+          id = id_,
+          offset = bytesSent_]() mutable {
+    for (auto& write : writes) {
+      // The FIN takes a stream offset of its own.
+      offset += write.buf.chainLength() + (write.fin ? 1 : 0);
+      if (write.deliveryCallback) {
+        write.deliveryCallback->onByteEventCanceled(id, offset - 1);
+      }
+    }
+  };
 }
 
 void WebTransportImpl::StreamWriteHandle::onStreamWriteReady(
@@ -384,6 +403,8 @@ WebTransportImpl::StreamWriteHandle::flushBufferedWrites() {
     VLOG(4) << __func__ << " Sending data on stream id=" << id_
             << " sendFin=" << sendFin
             << " sendDeliveryCallback=" << sendDeliveryCallback;
+    // Sending a FIN erases this handle.
+    bytesSent_ += bufToSendLen;
     auto res = impl_.sendWebTransportStreamData(
         id_, std::move(bufToSend), sendFin, sendDeliveryCallback);
 
@@ -641,7 +662,13 @@ bool WebTransportImpl::shouldGrantStreamCredit(bool isBidi) const {
 
 void WebTransportImpl::closeEgressStream(HTTPCodec::StreamID id) {
   maybeGrantStreamCredit(id, false, true);
-  wtEgressStreams_.erase(id);
+  auto it = wtEgressStreams_.find(id);
+  if (it == wtEgressStreams_.end()) {
+    return;
+  }
+  auto cancelWrites = it->second.detachBufferedWrites();
+  wtEgressStreams_.erase(it);
+  cancelWrites();
 }
 
 void WebTransportImpl::closeIngressStream(HTTPCodec::StreamID id) {

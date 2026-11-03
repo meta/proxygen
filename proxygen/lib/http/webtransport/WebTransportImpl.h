@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <folly/Function.h>
 #include <folly/io/async/DestructorCheck.h>
 #include <proxygen/lib/http/codec/HTTPCodec.h>
 #include <proxygen/lib/http/webtransport/FlowController.h>
@@ -276,6 +277,7 @@ class WebTransportImpl
         override;
 
     void onStopSending(uint32_t errorCode);
+    folly::Function<void()> detachBufferedWrites();
     folly::Expected<WebTransport::FCState, WebTransport::ErrorCode>
     flushBufferedWrites();
     void maybeResolveWritePromise(uint64_t maxToSend);
@@ -312,6 +314,7 @@ class WebTransportImpl
     WebTransportImpl& impl_;
     folly::Promise<uint64_t> writePromise_;
     std::list<BufferedWrite> bufferedWrites_;
+    uint64_t bytesSent_{0};
     bool streamWriteReady_{false};
   };
 

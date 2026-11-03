@@ -739,6 +739,79 @@ TEST_F(HTTPTransactionWebTransportTest, RefreshTimeout) {
   evb_.loop();
 }
 
+TEST_F(HTTPTransactionWebTransportTest, ResetCancelsBufferedWrites) {
+  auto wtImpl = dynamic_cast<WebTransportImpl*>(wt_);
+  ASSERT_NE(wtImpl, nullptr);
+  wtImpl->setUniStreamFlowControl(
+      /*maxStreamId=*/4,
+      /*targetConcurrentStreams=*/4);
+
+  EXPECT_CALL(transport_, newWebTransportUniStream()).WillOnce(Return(2));
+  auto writeHandle = wt_->createUniStream();
+  EXPECT_FALSE(writeHandle.hasError());
+
+  auto dcb1 = std::make_unique<StrictMock<MockDeliveryCallback>>();
+  auto dcb2 = std::make_unique<StrictMock<MockDeliveryCallback>>();
+  EXPECT_CALL(transport_, sendWTDataBlocked(0)).Times(2);
+  writeHandle.value()->writeStreamData(makeBuf(100), false, dcb1.get());
+  writeHandle.value()->writeStreamData(makeBuf(200), true, dcb2.get());
+
+  // Part of the first write goes out, without its delivery callback.
+  EXPECT_CALL(transport_, sendWebTransportStreamData(2, _, false, nullptr))
+      .WillOnce(Return(WTFCState::UNBLOCKED));
+  EXPECT_CALL(transport_, sendWTDataBlocked(50));
+  wtImpl->onMaxData(50);
+
+  EXPECT_CALL(*dcb1, onByteEventCanceled(2, 99));
+  EXPECT_CALL(*dcb2, onByteEventCanceled(2, 300));
+  EXPECT_CALL(transport_, resetWebTransportEgress(2, WT_APP_ERROR_1));
+  writeHandle.value()->resetStream(WT_APP_ERROR_1);
+}
+
+TEST_F(HTTPTransactionWebTransportTest, StopSendingCancelsBufferedWrites) {
+  auto wtImpl = dynamic_cast<WebTransportImpl*>(wt_);
+  ASSERT_NE(wtImpl, nullptr);
+  wtImpl->setUniStreamFlowControl(
+      /*maxStreamId=*/4,
+      /*targetConcurrentStreams=*/4);
+
+  EXPECT_CALL(transport_, newWebTransportUniStream()).WillOnce(Return(2));
+  auto writeHandle = wt_->createUniStream();
+  EXPECT_FALSE(writeHandle.hasError());
+
+  auto dcb = std::make_unique<StrictMock<MockDeliveryCallback>>();
+  EXPECT_CALL(transport_, sendWTDataBlocked(0));
+  writeHandle.value()->writeStreamData(makeBuf(100), false, dcb.get());
+
+  EXPECT_CALL(*dcb, onByteEventCanceled(2, 99));
+  txn_->onWebTransportStopSending(2, WT_APP_ERROR_2);
+
+  EXPECT_CALL(transport_, resetWebTransportEgress(2, WT_APP_ERROR_1));
+  writeHandle.value()->resetStream(WT_APP_ERROR_1);
+}
+
+TEST_F(HTTPTransactionWebTransportTest, SessionErrorCancelsBufferedWrites) {
+  auto wtImpl = dynamic_cast<WebTransportImpl*>(wt_);
+  ASSERT_NE(wtImpl, nullptr);
+  wtImpl->setUniStreamFlowControl(
+      /*maxStreamId=*/4,
+      /*targetConcurrentStreams=*/4);
+
+  EXPECT_CALL(transport_, newWebTransportUniStream()).WillOnce(Return(2));
+  auto writeHandle = wt_->createUniStream();
+  EXPECT_FALSE(writeHandle.hasError());
+
+  auto dcb = std::make_unique<StrictMock<MockDeliveryCallback>>();
+  EXPECT_CALL(transport_, sendWTDataBlocked(0));
+  writeHandle.value()->writeStreamData(makeBuf(100), true, dcb.get());
+
+  EXPECT_CALL(*dcb, onByteEventCanceled(2, 100));
+  handler_.expectError();
+  EXPECT_CALL(transport_, resetWebTransportEgress(2, _));
+  txn_->onError(
+      HTTPException(HTTPException::Direction::INGRESS_AND_EGRESS, "aborted"));
+}
+
 TEST_F(HTTPTransactionWebTransportTest, StopSendingThenAbort) {
   WebTransport::StreamReadHandle* readHandle{nullptr};
   EXPECT_CALL(handler_, onWebTransportUniStream(_, _))
