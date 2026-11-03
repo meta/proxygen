@@ -132,7 +132,12 @@ DecodeError HPACKDecodeBuffer::decodeInteger(uint8_t nbit, uint64_t& integer) {
       LOG(ERROR) << "overflow fexp=" << fexp;
       return DecodeError::INTEGER_OVERFLOW;
     }
-    uint64_t add = (byte & 127) * f;
+    uint64_t payload = byte & 127;
+    if (payload > std::numeric_limits<uint64_t>::max() / f) {
+      LOG(ERROR) << "overflow fexp=" << fexp << " payload=" << payload;
+      return DecodeError::INTEGER_OVERFLOW;
+    }
+    uint64_t add = payload * f;
     if (std::numeric_limits<uint64_t>::max() - integer <= add) {
       // overflow detected - we disallow uint64_t max.
       LOG(ERROR) << "overflow integer=" << integer << " add=" << add;

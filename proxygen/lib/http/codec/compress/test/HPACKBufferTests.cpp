@@ -6,6 +6,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <array>
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
 #include <folly/portability/GTest.h>
@@ -398,7 +399,7 @@ TEST_F(HPACKBufferTests, IntegerOverflow) {
   wdata[7] = 0xFF;
   wdata[8] = 0xFF;
   wdata[9] = 0xFF;
-  wdata[10] = 0x0F;
+  wdata[10] = 0x01;
   resetDecoder();
   EXPECT_EQ(decoder_.decodeInteger(8, integer), DecodeError::INTEGER_OVERFLOW);
 
@@ -417,6 +418,21 @@ TEST_F(HPACKBufferTests, IntegerOverflow) {
   wdata[11] = 0x01;
   resetDecoder();
   EXPECT_EQ(decoder_.decodeInteger(8, integer), DecodeError::INTEGER_OVERFLOW);
+}
+
+TEST_F(HPACKBufferTests, IntegerOverflowInLastByte) {
+  auto decodeWithLastByte = [this](uint8_t lastByte, uint64_t& integer) {
+    std::array<uint8_t, 11> data{
+        0xFF, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, lastByte};
+    buf_ = IOBuf::copyBuffer(data.data(), data.size());
+    resetDecoder();
+    return decoder_.decodeInteger(8, integer);
+  };
+  uint64_t integer = 0;
+  EXPECT_EQ(decodeWithLastByte(0x01, integer), DecodeError::NONE);
+  EXPECT_EQ(integer, (uint64_t(1) << 63) + 255);
+  EXPECT_EQ(decodeWithLastByte(0x02, integer), DecodeError::INTEGER_OVERFLOW);
+  EXPECT_EQ(decodeWithLastByte(0x03, integer), DecodeError::INTEGER_OVERFLOW);
 }
 
 /**

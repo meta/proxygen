@@ -1042,9 +1042,6 @@ TEST(QPACKContextTests, DecodeErrors) {
 
   VLOG(10) << "Bad cancel";
   buf->writableData()[0] = 0x7F;
-  buf->writableData()[10] = 0xFF;
-  buf->writableData()[11] = 0x01;
-  buf->append(1);
   EXPECT_EQ(encoder.decodeDecoderStream(buf->clone()),
             HPACK::DecodeError::INTEGER_OVERFLOW);
 
