@@ -207,8 +207,8 @@ struct WtStreamManager {
    */
   struct ReadCallback {
     virtual ~ReadCallback() noexcept = default;
-    // invoked when the read handle has available buffer space
-    virtual void readReady(WtReadHandle&) noexcept = 0;
+    // invoked when the app consumed bytesRead, freeing buffer space
+    virtual void readReady(WtReadHandle&, uint64_t bytesRead) noexcept = 0;
   };
   void setReadCb(WtReadHandle& rh, ReadCallback* rcb) noexcept;
 

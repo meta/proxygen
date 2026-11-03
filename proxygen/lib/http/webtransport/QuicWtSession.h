@@ -110,7 +110,8 @@ class QuicWtSessionBase
     QuicWtSessionBase& sess;
     explicit StreamManagerCallback(QuicWtSessionBase& session) : sess(session) {
     }
-    void readReady(detail::WtStreamManager::WtReadHandle& rh) noexcept override;
+    void readReady(detail::WtStreamManager::WtReadHandle& rh,
+                   uint64_t bytesRead) noexcept override;
     void eventsAvailable() noexcept override;
     void onNewPeerStream(uint64_t streamId) noexcept override;
 
@@ -140,9 +141,15 @@ class QuicWtSessionBase
   std::unique_ptr<quic::HTTPPriorityQueue> priorityQueue_;
   detail::WtStreamManager sm_;
   H3ConnectStreamCallback* observer_{nullptr};
+  /**
+   * When true, QuicSocket releases receive credit only as the app reads from
+   * sm_.
+   */
+  bool manualRead_{false};
 
  private:
   BidiStreamHandle createWtEgressHandle(StreamId id) noexcept;
+  void installReadCallback(StreamId id) noexcept;
 
   // -- StreamWriteCallback overrides --
   void onStreamWriteReady(StreamId id, uint64_t maxToSend) noexcept override;
@@ -174,7 +181,8 @@ class QuicWtSession final : public QuicWtSessionBase {
   }
 
  private:
-  QuicWtSession(std::shared_ptr<QuicSocket> quicSocket, WtHandlerPtr wtHandler);
+  QuicWtSession(const std::shared_ptr<QuicSocket>& quicSocket,
+                WtHandlerPtr wtHandler);
 
   struct QuicConnectionCallback : public QuicSocket::ConnectionCallback {
     QuicWtSession& sess;

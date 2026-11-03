@@ -939,7 +939,7 @@ folly::SemiFuture<StreamData> ReadHandle::readStreamData() {
     auto res = StreamData{ingress_.chain.pop(), ingress_.fin};
     XLOG(DBG6) << __func__ << "; len=" << len << "; fin=" << res.fin;
     if (rcb_) {
-      rcb_->readReady(*this);
+      rcb_->readReady(*this, len);
     }
     finish(ingress_.fin);
     return folly::makeSemiFuture(std::move(res));
@@ -959,6 +959,14 @@ folly::Expected<folly::Unit, ReadHandle::ErrCode> ReadHandle::stopSending(
     return folly::makeUnexpected(ReadHandle::ErrCode::SEND_ERROR);
   }
   state_ = ReadHandleState::HalfClosed;
+  // the app will not read the buffered data, so it counts as consumed
+  if (auto len = ingress_.chain.computeChainDataLength(); len > 0) {
+    ingress_.chain = folly::IOBuf();
+    smAccessor_.maybeGrantFc(/*rh=*/nullptr, len);
+    if (rcb_) {
+      rcb_->readReady(*this, len);
+    }
+  }
   smAccessor_.stopSending(*this, error);
   if (auto p = resetPromise(); p.valid()) { // resolve pending read with ex
     p.setException(makeWtException(kInternalWtErr, "tx stop_sending"));
@@ -984,7 +992,7 @@ Result ReadHandle::enqueue(StreamData&& data) noexcept {
     smAccessor_.maybeGrantFc(ingress_.fin ? nullptr : this, len);
     p.setValue(StreamData{ingress_.chain.pop(), ingress_.fin});
     if (rcb_) {
-      rcb_->readReady(*this);
+      rcb_->readReady(*this, len);
     }
     finish(ingress_.fin);
   } else if (state_ == ReadHandleState::HalfClosed && ingress_.fin) {
