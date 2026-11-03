@@ -29,7 +29,7 @@ HTTPHeaderEventTask VisitorFilter::readHeaderEvent() {
   if (headerEvent.hasException()) {
     co_yield folly::coro::co_error(std::move(headerEvent.exception()));
   }
-  co_return headerEvent;
+  co_yield folly::coro::co_result(std::move(headerEvent));
 }
 
 using HTTPBodyEventTask = folly::coro::Task<HTTPBodyEvent>;
@@ -43,7 +43,7 @@ HTTPBodyEventTask VisitorFilter::readBodyEvent(uint32_t max) {
   if (bodyEvent.hasException()) {
     co_yield folly::coro::co_error(std::move(bodyEvent.exception()));
   }
-  co_return bodyEvent;
+  co_yield folly::coro::co_result(std::move(bodyEvent));
 }
 
 } // namespace proxygen::coro

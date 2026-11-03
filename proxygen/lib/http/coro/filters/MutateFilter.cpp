@@ -29,7 +29,7 @@ HTTPHeaderEventTask MutateFilter::readHeaderEvent() {
   if (headerHook_) {
     headerHook_(headerEvent.value());
   }
-  co_return headerEvent;
+  co_yield folly::coro::co_result(std::move(headerEvent));
 }
 
 using HTTPBodyEventTask = folly::coro::Task<HTTPBodyEvent>;
@@ -43,7 +43,7 @@ HTTPBodyEventTask MutateFilter::readBodyEvent(uint32_t max) {
   if (bodyHook_) {
     bodyHook_(bodyEvent.value());
   }
-  co_return bodyEvent;
+  co_yield folly::coro::co_result(std::move(bodyEvent));
 }
 
 } // namespace proxygen::coro

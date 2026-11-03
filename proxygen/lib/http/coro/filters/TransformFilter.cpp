@@ -24,9 +24,9 @@ HTTPHeaderEventTask TransformFilter::readHeaderEvent() {
       co_await co_awaitTry(readHeaderEventImpl(/*deleteOnDone=*/false));
   auto guard = folly::makeGuard(lifetime(headerEvent));
   if (headerHook_) {
-    co_return headerHook_(std::move(headerEvent));
+    co_yield folly::coro::co_result(headerHook_(std::move(headerEvent)));
   }
-  co_return headerEvent;
+  co_yield folly::coro::co_result(std::move(headerEvent));
 }
 
 using HTTPBodyEventTask = folly::coro::Task<HTTPBodyEvent>;
@@ -35,9 +35,9 @@ HTTPBodyEventTask TransformFilter::readBodyEvent(uint32_t max) {
       co_await co_awaitTry(readBodyEventImpl(max, /*deleteOnDone=*/false));
   auto guard = folly::makeGuard(lifetime(bodyEvent));
   if (bodyHook_) {
-    co_return bodyHook_(std::move(bodyEvent));
+    co_yield folly::coro::co_result(bodyHook_(std::move(bodyEvent)));
   }
-  co_return bodyEvent;
+  co_yield folly::coro::co_result(std::move(bodyEvent));
 }
 
 } // namespace proxygen::coro

@@ -41,12 +41,12 @@ folly::coro::Task<HTTPBodyEvent> RateLimitFilter::readAndUpdateBytesCount(
     // The filter itself might have been deleted already at this point if it's
     // heap allocated. Either way, this is the end of body reads, so no need to
     // update bytes count in this case.
-    co_return readEvent;
+    co_yield folly::coro::co_result(std::move(readEvent));
   }
   if (auto* body = asBodyEv(*readEvent)) {
     readBytesCount_ += body->chainLength();
   }
-  co_return readEvent;
+  co_yield folly::coro::co_result(std::move(readEvent));
 }
 
 folly::coro::Task<HTTPBodyEvent> RateLimitFilter::readBodyEvent(uint32_t max) {

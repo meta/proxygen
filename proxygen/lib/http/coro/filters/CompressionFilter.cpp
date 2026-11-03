@@ -29,7 +29,7 @@ folly::coro::Task<HTTPHeaderEvent> CompressionFilter::readHeaderEvent() {
                          *headerEvent->headers, params_->value());
   if (skipCompression_) {
     // passthru if skipping compression / has exception
-    co_return headerEvent;
+    co_yield folly::coro::co_result(std::move(headerEvent));
   }
 
   // try to create compressor
@@ -43,7 +43,7 @@ folly::coro::Task<HTTPHeaderEvent> CompressionFilter::readHeaderEvent() {
   headerEvent->headers->getHeaders().set(HTTP_HEADER_CONTENT_ENCODING,
                                          params_->value().headerEncoding);
   headerEvent->headers->setIsChunked(true);
-  co_return headerEvent;
+  co_yield folly::coro::co_result(std::move(headerEvent));
 }
 
 folly::coro::Task<HTTPBodyEvent> CompressionFilter::readBodyEvent(
@@ -55,7 +55,7 @@ folly::coro::Task<HTTPBodyEvent> CompressionFilter::readBodyEvent(
     auto bodyEvent =
         folly::Try<HTTPBodyEvent>(std::move(pendingBodyEvent_.value()));
     auto guard = folly::makeGuard(lifetime(bodyEvent));
-    co_return std::move(bodyEvent);
+    co_yield folly::coro::co_result(std::move(bodyEvent));
   }
 
   auto bodyEvent =
@@ -67,7 +67,7 @@ folly::coro::Task<HTTPBodyEvent> CompressionFilter::readBodyEvent(
 
   // passthru on skipCompression flag or body exception
   if (skipCompression_ || bodyEvent.hasException()) {
-    co_return bodyEvent;
+    co_yield folly::coro::co_result(std::move(bodyEvent));
   }
 
   // try to compress body, validate success
@@ -81,7 +81,7 @@ folly::coro::Task<HTTPBodyEvent> CompressionFilter::readBodyEvent(
     }
     // replace with compressed body
     bodyEvent->event.body = std::move(compressed);
-    co_return bodyEvent;
+    co_yield folly::coro::co_result(std::move(bodyEvent));
   }
 
   // there may be remaining unflushed data in compressor, if so that data
@@ -96,7 +96,7 @@ folly::coro::Task<HTTPBodyEvent> CompressionFilter::readBodyEvent(
     }
     // if no remaining unflushed data, return bodyEvent as is
     if (compressed == nullptr || compressed->empty()) {
-      co_return bodyEvent;
+      co_yield folly::coro::co_result(std::move(bodyEvent));
     }
 
     // need to buffer trailers, dismiss guard as mentioned above
@@ -108,6 +108,6 @@ folly::coro::Task<HTTPBodyEvent> CompressionFilter::readBodyEvent(
     co_return HTTPBodyEvent(std::move(compressed), /*trailer=*/false);
   }
 
-  co_return bodyEvent;
+  co_yield folly::coro::co_result(std::move(bodyEvent));
 }
 } // namespace proxygen::coro

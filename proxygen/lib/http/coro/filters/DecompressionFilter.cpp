@@ -66,10 +66,10 @@ DecompressionIngressFilter::readHeaderEvent() {
       co_await co_awaitTry(readHeaderEventImpl(/*deleteOnDone=*/false));
   auto guard = folly::makeGuard(lifetime(headerEvent));
   if (headerEvent.hasException() || headerEvent->eom) {
-    co_return headerEvent;
+    co_yield folly::coro::co_result(std::move(headerEvent));
   }
   initializeWithHTTPMessage(*headerEvent->headers);
-  co_return headerEvent;
+  co_yield folly::coro::co_result(std::move(headerEvent));
 }
 
 /* static */ bool DecompressionIngressFilter::compressionSupported(
@@ -122,7 +122,7 @@ folly::coro::Task<HTTPBodyEvent> DecompressionIngressFilter::readBodyEvent(
   auto guard = folly::makeGuard(lifetime(bodyEvent));
   if (!decompressor_ || bodyEvent.hasException()) {
     // if unsupported compression or error, return as is
-    co_return bodyEvent;
+    co_yield folly::coro::co_result(std::move(bodyEvent));
   }
 
   if (auto* body = asBodyEv(*bodyEvent)) {
@@ -151,7 +151,7 @@ folly::coro::Task<HTTPBodyEvent> DecompressionIngressFilter::readBodyEvent(
     co_yield co_error(DecompressionFailedError);
   }
 
-  co_return bodyEvent;
+  co_yield folly::coro::co_result(std::move(bodyEvent));
 }
 
 }; // namespace proxygen::coro
