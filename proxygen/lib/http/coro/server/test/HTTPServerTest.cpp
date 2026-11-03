@@ -21,6 +21,7 @@
 #include <proxygen/lib/http/coro/server/ScopedHTTPServer.h>
 #include <proxygen/lib/http/coro/test/HTTPTestSources.h>
 
+#include <algorithm>
 #include <chrono>
 #include <folly/coro/GtestHelpers.h>
 #include <folly/io/SocketOptionMap.h>
@@ -341,12 +342,32 @@ TEST_P(HTTPServerTests, TestStopMultipleTimes) {
 TEST_P(HTTPServerTests, TestZeroThreadsMeansNumCPUs) {
   MockServerObserver mockObserver;
   serverConfig_.numIOThreads = 0;
-  auto cpuCount = folly::available_concurrency();
-  EXPECT_CALL(mockObserver, onThreadStart(_)).Times(folly::to<int>(cpuCount));
-  EXPECT_CALL(mockObserver, onThreadStop(_)).Times(folly::to<int>(cpuCount));
+  size_t expectedThreads = folly::available_concurrency();
+  if (GetParam() == TransportType::QUIC) {
+    expectedThreads = std::min(expectedThreads, quic::QuicServer::kMaxWorkers);
+  }
+  EXPECT_CALL(mockObserver, onThreadStart(_))
+      .Times(folly::to<int>(expectedThreads));
+  EXPECT_CALL(mockObserver, onThreadStop(_))
+      .Times(folly::to<int>(expectedThreads));
 
   startServer(&mockObserver);
-  EXPECT_EQ(server_->getServer().getConfig().numIOThreads, cpuCount);
+  EXPECT_EQ(server_->getServer().getConfig().numIOThreads, expectedThreads);
+  stopServer();
+}
+
+TEST_P(HTTPServerTests, TestQuicThreadsCappedAtMaxWorkers) {
+  if (GetParam() != TransportType::QUIC) {
+    GTEST_SKIP() << "Worker cap only applies to QUIC";
+  }
+  const size_t limit = quic::QuicServer::kMaxWorkers;
+  serverConfig_.numIOThreads = limit + 1;
+
+  MockServerObserver mockObserver;
+  EXPECT_CALL(mockObserver, onThreadStart(_)).Times(folly::to<int>(limit));
+  EXPECT_CALL(mockObserver, onThreadStop(_)).Times(folly::to<int>(limit));
+  startServer(&mockObserver);
+  EXPECT_EQ(server_->getServer().getConfig().numIOThreads, limit);
   stopServer();
 }
 

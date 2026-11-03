@@ -83,6 +83,8 @@ class HTTPServer : public quic::QuicHandshakeSocketHolder::Callback {
     std::vector<folly::IPAddress> bindAddresses;
     std::string plaintextProtocol;
     SessionConfig sessionConfig;
+    // Zero uses the available CPU count.
+    // Capped at QuicServer::kMaxWorkers when QUIC is enabled.
     size_t numIOThreads{1};
     std::vector<int> shutdownOnSignals{SIGINT};
     NewConnectionFilter newConnectionFilter;

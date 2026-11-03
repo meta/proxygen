@@ -128,6 +128,13 @@ void HTTPServer::start(
   if (config_.numIOThreads == 0) {
     config_.numIOThreads = folly::available_concurrency();
   }
+  if (config_.quicConfig &&
+      config_.numIOThreads > quic::QuicServer::kMaxWorkers) {
+    XLOG(WARNING) << "QuicServer supports at most "
+                  << quic::QuicServer::kMaxWorkers
+                  << " workers; capping requested " << config_.numIOThreads;
+    config_.numIOThreads = quic::QuicServer::kMaxWorkers;
+  }
   folly::IOThreadPoolExecutor::Options options;
   options.setWaitForAll(true);
   folly::IOThreadPoolExecutor threadPool(
