@@ -356,21 +356,6 @@ TEST_P(HTTPServerTests, TestZeroThreadsMeansNumCPUs) {
   stopServer();
 }
 
-TEST_P(HTTPServerTests, TestQuicThreadsCappedAtMaxWorkers) {
-  if (GetParam() != TransportType::QUIC) {
-    GTEST_SKIP() << "Worker cap only applies to QUIC";
-  }
-  const size_t limit = quic::QuicServer::kMaxWorkers;
-  serverConfig_.numIOThreads = limit + 1;
-
-  MockServerObserver mockObserver;
-  EXPECT_CALL(mockObserver, onThreadStart(_)).Times(folly::to<int>(limit));
-  EXPECT_CALL(mockObserver, onThreadStop(_)).Times(folly::to<int>(limit));
-  startServer(&mockObserver);
-  EXPECT_EQ(server_->getServer().getConfig().numIOThreads, limit);
-  stopServer();
-}
-
 TEST_P(HTTPServerTests, TestSampling) {
   // `expectRequest=false` will set the sampling rate to zero. We then send a
   // request to validate `.addPacket()` is never invoked on mocked qlogger.
@@ -584,6 +569,25 @@ INSTANTIATE_TEST_SUITE_P(HTTPServerStartStop,
                          HTTPServerTests,
                          testing::Values(TransportType::QUIC,
                                          TransportType::TLS),
+                         transportTypeToString);
+
+class HTTPServerQuicTests : public HTTPServerTests {};
+
+TEST_P(HTTPServerQuicTests, TestQuicThreadsCappedAtMaxWorkers) {
+  const size_t limit = quic::QuicServer::kMaxWorkers;
+  serverConfig_.numIOThreads = limit + 1;
+
+  MockServerObserver mockObserver;
+  EXPECT_CALL(mockObserver, onThreadStart(_)).Times(folly::to<int>(limit));
+  EXPECT_CALL(mockObserver, onThreadStop(_)).Times(folly::to<int>(limit));
+  startServer(&mockObserver);
+  EXPECT_EQ(server_->getServer().getConfig().numIOThreads, limit);
+  stopServer();
+}
+
+INSTANTIATE_TEST_SUITE_P(HTTPServerStartStop,
+                         HTTPServerQuicTests,
+                         testing::Values(TransportType::QUIC),
                          transportTypeToString);
 
 class HTTPStatsFilterTests : public HTTPServerTests {
