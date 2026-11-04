@@ -36,8 +36,8 @@ proxygen_add_library(proxygen_http_session_session
     proxygen_http_session_transaction_byte_events
     proxygen_utils_shared_wheel_timer
     proxygen_utils_time_util
-    wangle::wangle_acceptor_acceptor_core
     wangle::wangle_acceptor_managed
+    wangle::wangle_acceptor_transport_info
     fizz::fizz
     Folly::folly_container_f14_hash
     Folly::folly_function
@@ -175,7 +175,7 @@ proxygen_add_library(proxygen_http_session_http_transaction
     proxygen_utils_shared_wheel_timer
     proxygen_utils_time_util
     proxygen_utils_trace
-    wangle::wangle_acceptor_acceptor_core
+    wangle::wangle_acceptor_transport_info
     Folly::folly_io_async_async_base
     Folly::folly_io_async_async_transport
     Folly::folly_io_async_delayed_destruction
@@ -287,7 +287,7 @@ proxygen_add_library(proxygen_http_session_quic_protocol_info
   EXPORTED_DEPS
     mvfst::mvfst_api_transport
     mvfst::mvfst_common_optional
-    wangle::wangle_acceptor_acceptor_core
+    wangle::wangle_acceptor_transport_info
 )
 
 proxygen_add_library(proxygen_http_session_webtransport_filter

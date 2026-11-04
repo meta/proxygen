@@ -107,8 +107,8 @@ proxygen_add_library(proxygen_coro
     mvfst::mvfst_common_events_folly_eventbase
     mvfst::mvfst_common_optional
     mvfst::mvfst_priority_http_priority_queue
-    wangle::wangle_acceptor_acceptor_core
     wangle::wangle_acceptor_managed
+    wangle::wangle_acceptor_transport_info
     Folly::folly_container_evicting_cache_map
     Folly::folly_container_f14_hash
     Folly::folly_coro_async_scope

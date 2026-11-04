@@ -37,7 +37,7 @@ proxygen_add_library(proxygen_services
     proxygen_services_worker
     proxygen_utils_acceptor_address
     wangle::wangle_acceptor
-    wangle::wangle_acceptor_acceptor_core
+    wangle::wangle_acceptor_connection_counter
     Folly::folly_io_async_async_base
     Folly::folly_io_async_server_socket
     glog::glog

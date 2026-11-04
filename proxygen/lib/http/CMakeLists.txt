@@ -60,7 +60,7 @@ proxygen_add_library(proxygen_http_client
     proxygen_http_codec_codec_factory
     proxygen_utils_shared_wheel_timer
     proxygen_utils_time_util
-    wangle::wangle_acceptor_acceptor_core
+    wangle::wangle_acceptor_transport_info
     Folly::folly_io_async_async_base
     Folly::folly_io_async_async_socket
     Folly::folly_io_async_ssl_context

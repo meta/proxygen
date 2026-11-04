@@ -10,7 +10,7 @@ proxygen_add_library(proxygen_transport_persistent_fizz_psk_cache
   SRCS
     PersistentFizzPskCache.cpp
   EXPORTED_DEPS
-    wangle::wangle_client_persistence
+    wangle::wangle_client_persistence_file
     fizz::fizz
 )
 
@@ -24,7 +24,7 @@ proxygen_add_library(proxygen_transport_persistent_quic_psk_cache
   EXPORTED_DEPS
     proxygen_transport_persistent_fizz_psk_cache
     mvfst::mvfst_fizz_client_handshake_psk_cache
-    wangle::wangle_client_persistence
+    wangle::wangle_client_persistence_file
     fizz::fizz
     Folly::folly_json_dynamic
     Folly::folly_optional
@@ -38,7 +38,7 @@ proxygen_add_library(proxygen_transport_h3_datagram_async_socket
     proxygen_transport_connect_udp_utils
     mvfst::mvfst_common_udpsocket_folly_async_udp_socket
     mvfst::mvfst_fizz_client_handshake
-    wangle::wangle_acceptor_acceptor_core
+    wangle::wangle_acceptor_transport_info
     fizz::fizz
     Folly::folly_file_util
   EXPORTED_DEPS
@@ -70,7 +70,7 @@ proxygen_add_library(proxygen_transport_persistent_quic_token_cache
     PersistentQuicTokenCache.cpp
   EXPORTED_DEPS
     mvfst::mvfst_fizz_client_handshake_token_cache
-    wangle::wangle_client_persistence
+    wangle::wangle_client_persistence_file
 )
 
 proxygen_add_library(proxygen_transport_async_udp_socket_factory

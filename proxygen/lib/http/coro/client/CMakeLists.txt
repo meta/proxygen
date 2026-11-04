@@ -60,7 +60,7 @@ proxygen_add_library(proxygen_http_coro_client_http_connector
     mvfst::mvfst_common_udpsocket_folly_async_udp_socket
     mvfst::mvfst_exception
     mvfst::mvfst_fizz_client_handshake
-    wangle::wangle_ssl_ssl_config
+    wangle::wangle_ssl_ssl_stats
     wangle::wangle_ssl_ssl_util
     fizz::fizz
     Folly::folly_coro_collect
