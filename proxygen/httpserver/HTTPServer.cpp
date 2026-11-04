@@ -144,7 +144,7 @@ folly::Expected<folly::Unit, std::exception_ptr> HTTPServer::startTcpServer(
   ioExecutor->addObserver(exeObserver);
 
   try {
-    FOR_EACH_RANGE(i, 0, addresses_.size()) {
+    for (std::size_t i = 0; i < addresses_.size(); ++i) {
       auto accConfig = HTTPServerAcceptor::makeConfig(addresses_[i], *options_);
       auto codecFactory = addresses_[i].codecFactory;
       auto acceptorFactory =
@@ -258,10 +258,10 @@ const std::vector<const folly::AsyncSocketBase*> HTTPServer::getSockets()
     const {
 
   std::vector<const folly::AsyncSocketBase*> sockets;
-  FOR_EACH_RANGE(i, 0, bootstrap_.size()) {
-    auto bootstrapSockets = bootstrap_[i].getSockets();
-    FOR_EACH_RANGE(j, 0, bootstrapSockets.size()) {
-      sockets.push_back(bootstrapSockets[j].get());
+  for (const auto& bootstrap : bootstrap_) {
+    auto bootstrapSockets = bootstrap.getSockets();
+    for (const auto& socket : bootstrapSockets) {
+      sockets.push_back(socket.get());
     }
   }
 
