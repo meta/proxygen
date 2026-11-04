@@ -209,9 +209,9 @@ void HTTPStreamSource::abort(HTTPErrorCode error,
 folly::coro::Task<HTTPHeaderEvent> HTTPStreamSource::readHeaderEvent() {
   XCHECK(event_.getEventBase()->isInEventBaseThread());
 
-  bool eomReturn = false;
-  auto guard =
-      folly::makeGuard([this, &eomReturn] { checkForCompletion(eomReturn); });
+  bool readComplete = false;
+  auto guard = folly::makeGuard(
+      [this, &readComplete] { checkForCompletion(readComplete); });
   if (readState_ != ReadState::HeaderEvents) {
     setError(HTTPErrorCode::INVALID_STATE_TRANSITION,
              "readHeaderEvent called after final headers read");
@@ -221,13 +221,14 @@ folly::coro::Task<HTTPHeaderEvent> HTTPStreamSource::readHeaderEvent() {
     co_await waitForEvent();
   }
   if (error_) {
+    readComplete = true;
     co_yield folly::coro::co_error(std::move(error_->first));
   }
   // Calling body() before headers() will error out of waitForEvent
   XCHECK(!headerQueue_.empty());
   auto res = std::move(headerQueue_.front());
   headerQueue_.pop_front();
-  eomReturn = res.eom;
+  readComplete = res.eom;
   if (res.isFinal()) {
     readState_ = ReadState::BodyEvents;
   }
@@ -238,9 +239,9 @@ folly::coro::Task<HTTPHeaderEvent> HTTPStreamSource::readHeaderEvent() {
 folly::coro::Task<HTTPBodyEvent> HTTPStreamSource::readBodyEvent(uint32_t max) {
   XCHECK_GT(max, 0UL);
   XCHECK(event_.getEventBase()->isInEventBaseThread());
-  bool eomReturn = false;
-  auto guard =
-      folly::makeGuard([this, &eomReturn] { checkForCompletion(eomReturn); });
+  bool readComplete = false;
+  auto guard = folly::makeGuard(
+      [this, &readComplete] { checkForCompletion(readComplete); });
   if (readState_ != ReadState::BodyEvents) {
     setError(HTTPErrorCode::INVALID_STATE_TRANSITION,
              "readBodyEvent called before final headers read");
@@ -256,6 +257,7 @@ folly::coro::Task<HTTPBodyEvent> HTTPStreamSource::readBodyEvent(uint32_t max) {
   }
   if (error_) {
     // TODO: handle timeouts differently here?
+    readComplete = true;
     co_yield folly::coro::co_error(std::move(error_->first));
   }
   // If there's no error, there must be queued body event
@@ -284,7 +286,7 @@ folly::coro::Task<HTTPBodyEvent> HTTPStreamSource::readBodyEvent(uint32_t max) {
     DCHECK_GE(bufferedDatagramSize_, length);
     bufferedDatagramSize_ -= length;
   }
-  eomReturn = res.eom;
+  readComplete = res.eom;
   co_return res;
 }
 
@@ -296,7 +298,7 @@ void HTTPStreamSource::stopReading(
   setErrorImpl(error.value_or(HTTPErrorCode::NO_ERROR),
                "Abandoned reading",
                /*ingress=*/false);
-  checkForCompletion(false);
+  checkForCompletion(true);
 }
 
 bool HTTPStreamSource::validateHeaders(const HTTPMessage& msg, bool eom) {

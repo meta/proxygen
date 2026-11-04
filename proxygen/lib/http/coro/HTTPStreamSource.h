@@ -288,8 +288,8 @@ class HTTPStreamSource : public HTTPSource {
     return error_->first;
   }
 
-  void checkForCompletion(bool eomReturn) {
-    if (!sourceComplete_ && (error_ || eomReturn) && waiters_ == 0) {
+  void checkForCompletion(bool readComplete) {
+    if (!sourceComplete_ && readComplete && waiters_ == 0) {
       sourceComplete_ = true;
       auto heapAllocated = heapAllocated_;
       if (callback_) {

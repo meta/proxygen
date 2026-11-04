@@ -198,6 +198,56 @@ class HTTPTransactionAdaptorSourceTests : public HTTPClientTests {
     }
   }
 
+  void testErrorDuringBodyRead(HTTPMethod method) {
+    EXPECT_CALL(*mockTxn_, pauseIngress()).Times(AnyNumber());
+    EXPECT_CALL(*mockTxn_, sendAbort(_)).Times(AnyNumber());
+    mockTxn_->setHandlerUnmocked(getHandler());
+    auto* source = static_cast<HTTPStreamSource*>(adaptor_->getIngressSource());
+
+    auto msg = std::make_unique<HTTPMessage>();
+    msg->setMethod(method);
+    msg->setURL(method == HTTPMethod::CONNECT ? "example.invalid:443"
+                                              : "/upload");
+    msg->getHeaders().set(HTTP_HEADER_HOST, "example.invalid:443");
+    msg->getHeaders().set(HTTP_HEADER_CONTENT_LENGTH, "100000");
+    mockTxn_->onIngressHeadersComplete(std::move(msg));
+    mockTxn_->onIngressBody(folly::IOBuf::copyBuffer(std::string(65535, 'a')),
+                            0);
+    if (method == HTTPMethod::CONNECT) {
+      mockTxn_->onIngressEOM();
+    } else {
+      auto trailers = std::make_unique<HTTPHeaders>();
+      trailers->add("x-test", "1");
+      mockTxn_->onIngressTrailers(std::move(trailers));
+    }
+
+    HTTPSourceHolder holder(source);
+    bool readDone = false;
+    auto read = [&]() -> folly::coro::Task<void> {
+      auto headers = co_await holder.readHeaderEvent();
+      EXPECT_FALSE(headers.eom);
+      auto body = co_await holder.readBodyEvent();
+      EXPECT_EQ(body.eventType, HTTPBodyEvent::BODY);
+      EXPECT_EQ(body.event.body.chainLength(), 65535);
+      EXPECT_FALSE(body.eom);
+      EXPECT_FALSE(source->sourceComplete());
+      EXPECT_TRUE(bool(holder));
+
+      auto error = co_await co_awaitTry(holder.readBodyEvent());
+      EXPECT_TRUE(error.hasException());
+      EXPECT_EQ(getHTTPError(error).code,
+                HTTPErrorCode::CONTENT_LENGTH_MISMATCH);
+      EXPECT_FALSE(bool(holder));
+      readDone = true;
+    };
+    co_withExecutor(&evb_, read()).start();
+    evb_.loop();
+    EXPECT_TRUE(readDone);
+    mockTxn_->setHandlerUnmocked(nullptr);
+    getHandler()->detachTransaction();
+    evb_.loop();
+  }
+
   folly::HHWheelTimer::UniquePtr wheelTimer_;
   HTTP2PriorityQueue downstreamEgressQueue_;
   HTTP2PriorityQueue upstreamEgressQueue_;
@@ -256,6 +306,14 @@ CO_TEST_P_X(HTTPTransactionAdaptorSourceTests, IngressBackPressure) {
                                         .maybeBody = std::move(body),
                                     });
   getHandler()->detachTransaction();
+}
+
+TEST_P(HTTPTransactionAdaptorSourceTests, TrailersErrorDuringBodyRead) {
+  testErrorDuringBodyRead(HTTPMethod::POST);
+}
+
+TEST_P(HTTPTransactionAdaptorSourceTests, ConnectErrorDuringBodyRead) {
+  testErrorDuringBodyRead(HTTPMethod::CONNECT);
 }
 
 CO_TEST_P_X(HTTPTransactionAdaptorSourceTests, IngressError) {
