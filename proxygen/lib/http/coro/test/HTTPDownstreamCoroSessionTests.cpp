@@ -4499,6 +4499,69 @@ CO_TEST_P_X(H2DownstreamWtTest, WebTransportTest) {
   co_return;
 }
 
+class H3DownstreamWtTest : public HTTPDownstreamSessionTest {
+  void SetUp() override {
+    initSelfCodec_ = enableH3CodecWtSettings;
+    HTTPDownstreamSessionTest::SetUp();
+  }
+};
+
+CO_TEST_P_X(H3DownstreamWtTest, WebTransportTest) {
+  auto req = getGetRequest("/");
+  req.setUpgradeProtocol("webtransport");
+  auto connectStreamId = sendRequest(req,
+                                     /*body=*/nullptr,
+                                     /*eom=*/false,
+                                     /*eof=*/false);
+
+  folly::coro::Baton waitForRespSource;
+  MockHTTPSource respSource;
+  auto wtHandler = DummyWtHandler::make();
+  auto wtHandlerCtx = wtHandler->ctx;
+
+  EXPECT_CALL(respSource, readHeaderEvent())
+      .WillOnce(Return(
+          folly::coro::co_invoke([&]() -> folly::coro::Task<HTTPHeaderEvent> {
+            HTTPHeaderEvent ev{makeResponse(200), /*inEOM=*/false};
+            ev.wtHandler = std::move(wtHandler);
+            waitForRespSource.post();
+            co_return ev;
+          })));
+  EXPECT_CALL(respSource, readBodyEvent(_)).Times(0);
+  EXPECT_CALL(respSource, stopReading(_));
+
+  auto handler =
+      addSimpleStrictHandler([&](folly::EventBase * /*evb*/,
+                                 HTTPSessionContextPtr /*ctx*/,
+                                 HTTPSourceHolder requestSource)
+                                 -> folly::coro::Task<HTTPSourceHolder> {
+        co_await expectRequest(
+            requestSource, HTTPMethod::CONNECT, /*path=*/"/", /*eom=*/false);
+        requestSource.release();
+        co_return &respSource;
+      });
+
+  co_await waitForRespSource;
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  CO_ASSERT_NE(wtHandlerCtx->wtSession, nullptr);
+
+  auto uniId = muxTransport_->nextUnidirectionalStreamId_;
+  muxTransport_->nextUnidirectionalStreamId_ += 4;
+  folly::IOBufQueue prefaceBuf{folly::IOBufQueue::cacheChainLength()};
+  hq::writeWTStreamPreface(
+      prefaceBuf, hq::WebTransportStreamType::UNI, connectStreamId);
+  muxTransport_->socketDriver_.addReadEvent(uniId, prefaceBuf.move());
+  muxTransport_->socketDriver_.addReadEvent(uniId, makeBuf(100));
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+
+  XCHECK_EQ(wtHandlerCtx->peerStreams.size(), 1u);
+  EXPECT_NE(wtHandlerCtx->peerStreams[0].readHandle, nullptr);
+  EXPECT_EQ(wtHandlerCtx->peerStreams[0].writeHandle, nullptr);
+
+  wtHandlerCtx->wtSession->closeSession(folly::none);
+  co_return;
+}
+
 INSTANTIATE_TEST_SUITE_P(
     HTTPDownstreamSessionTest,
     HTTPDownstreamSessionTest,
@@ -4555,6 +4618,12 @@ INSTANTIATE_TEST_SUITE_P(
     H2DownstreamWtTest,
     H2DownstreamWtTest,
     Values(TestParams({.codecProtocol = CodecProtocol::HTTP_2})),
+    paramsToTestName);
+
+INSTANTIATE_TEST_SUITE_P(
+    H3DownstreamWtTest,
+    H3DownstreamWtTest,
+    Values(TestParams({.codecProtocol = CodecProtocol::HQ})),
     paramsToTestName);
 
 } // namespace proxygen::coro::test

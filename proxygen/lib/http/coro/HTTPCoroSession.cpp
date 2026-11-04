@@ -1941,11 +1941,12 @@ HTTPCoroSession::ResponseState HTTPCoroSession::processResponseHeaderEvent(
     WtHelper wtHelper{*this};
     auto egress = wtHelper.createEgressSource();
     egress->validateHeadersAndSkip(*headerEvent->headers);
-    stream.setEgressSource(egress.get()); // hijack egress source
-    auto transport = wtHelper.createHttpSourceTransport(std::move(egress),
-                                                        &stream.streamSource);
-    auto wtSess = wtHelper.createWtSession(std::move(transport),
-                                           std::move(headerEvent->wtHandler));
+    auto* egressSource = egress.get();
+    createWebTransport(stream.getID(),
+                       egress.release(),
+                       &stream.streamSource,
+                       std::move(headerEvent->wtHandler));
+    stream.setEgressSource(egressSource);
     return ResponseState::BODY;
   }
 
