@@ -587,11 +587,6 @@ class HQSession
   // has been erased
   bool eraseStream(quic::StreamId);
 
-  void resumeReadsForPushStream(quic::StreamId streamId) {
-    pendingProcessReadSet_.insert(streamId);
-    resumeReads(streamId);
-  }
-
   // Find a control stream by type
   HQControlStream* findControlStream(hq::UnidirectionalStreamType streamType);
 
@@ -789,13 +784,13 @@ class HQSession
   // during the last event loop
   void processReadData();
 
-  // Pausing reads prevents the read callback to be invoked on the stream
-  void resumeReads(quic::StreamId id);
+  // Resume a stream unless its codec or the session buffer limit blocks reads.
+  void resumeReads(HQStreamTransportBase& stream);
 
   // Resume all ingress transactions
   void resumeReads();
 
-  // Resuming the reads allows the read callback to be involved
+  // Pausing reads prevents the read callback from being invoked on the stream.
   void pauseReads(quic::StreamId id);
 
   // Pause all ingress transactions
@@ -1637,6 +1632,8 @@ class HQSession
     }
     // have read EOF
     bool readEOF_{false};
+    // Tracks a parser pause that persists after onIngress returns.
+    bool readPausedForCodec_{false};
     bool hasCodec_{false};
     // The stream's HQ codec, when it has one; it reports how each generated
     // body was framed.

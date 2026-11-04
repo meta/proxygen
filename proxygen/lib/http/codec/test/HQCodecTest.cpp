@@ -372,16 +372,24 @@ void HQCodecTestFixture<T>::qpackTest(bool blocked) {
   }
   TestStreamingCallback cb;
   CHECK(!queue_.empty());
+  size_t pauses = 0;
+  downstreamCodec_->setPauseHook([&] {
+    EXPECT_TRUE(downstreamCodec_->isParserPaused());
+    ++pauses;
+  });
   upstreamCodec_->generateBody(
       queue_, streamId, folly::IOBuf::copyBuffer("ohai"), 0, false);
   upstreamCodec_->generateEOM(queue_, streamId);
   auto consumed = downstreamCodec_->onIngress(*queue_.front());
+  EXPECT_EQ(pauses, blocked ? 1 : 0);
   EXPECT_TRUE(blocked || consumed == queue_.chainLength());
   queue_.trimStart(consumed);
   EXPECT_EQ(callbacks_.streamErrors, 0);
   EXPECT_EQ(callbacks_.sessionErrors, 0);
   if (blocked) {
     EXPECT_EQ(callbacks_.headersComplete, 0);
+    EXPECT_EQ(downstreamCodec_->onIngress(*queue_.front()), 0);
+    EXPECT_EQ(pauses, 1);
     qpackEncoderCodec_.onUnidirectionalIngress(qpackUpEncoderWriteBuf_.move());
     EXPECT_EQ(callbacks_.sessionErrors, 0);
   }
@@ -1035,6 +1043,89 @@ TEST_F(HQCodecTest, PaddingIgnored) {
   EXPECT_EQ(callbacks_.streamErrors, 0);
   EXPECT_EQ(callbacks_.sessionErrors, 0);
   EXPECT_EQ(callbacks_.lastParseError, nullptr);
+}
+
+TEST_F(HQCodecTest, FragmentedControlFramesBoundUnparsedChain) {
+  IOBufQueue input{IOBufQueue::cacheChainLength()};
+  writeValidFrame(input, FrameType::SETTINGS);
+  writeFrameHeaderManual(input, 0x21, 100);
+  input.append(std::string(100, 'x'));
+  hq::writePriorityUpdate(
+      input,
+      0,
+      folly::to<std::string>("u=1, x=\"", std::string(100, 'a'), "\""));
+  writeValidFrame(input, FrameType::GOAWAY);
+
+  while (!input.empty()) {
+    queueCtrl_.append(input.split(1));
+    parseControl(CodecType::CONTROL_DOWNSTREAM);
+    EXPECT_LE(queueCtrl_.empty() ? 0 : queueCtrl_.front()->countChainElements(),
+              10);
+  }
+  EXPECT_EQ(callbacks_.settings, 1);
+  EXPECT_EQ(callbacks_.unknownFrames, 1);
+  EXPECT_EQ(callbacks_.urgency, 1);
+  EXPECT_EQ(callbacks_.goaways, 1);
+  EXPECT_EQ(callbacks_.sessionErrors, 0);
+}
+
+TEST_F(HQCodecTest, ControlFrameTooLarge) {
+  writeFrameHeaderManual(
+      queueCtrl_, static_cast<uint64_t>(FrameType::SETTINGS), 4097);
+  parseControl(CodecType::CONTROL_DOWNSTREAM);
+  EXPECT_EQ(callbacks_.sessionErrors, 1);
+  EXPECT_EQ(callbacks_.lastParseError->getHttp3ErrorCode(),
+            HTTP3::ErrorCode::HTTP_FRAME_ERROR);
+}
+
+TEST_F(HQCodecTest, IdFrameTooLarge) {
+  writeValidFrame(queueCtrl_, FrameType::SETTINGS);
+  writeFrameHeaderManual(
+      queueCtrl_, static_cast<uint64_t>(FrameType::GOAWAY), 9);
+  parseControl(CodecType::CONTROL_DOWNSTREAM);
+  EXPECT_EQ(callbacks_.sessionErrors, 1);
+  EXPECT_EQ(callbacks_.lastParseError->getHttp3ErrorCode(),
+            HTTP3::ErrorCode::HTTP_FRAME_ERROR);
+}
+
+TEST_F(HQCodecTest, FragmentedHeadersThenDataInFinalChunk) {
+  // Feed HEADERS in small chunks so the payload is copied into the codec, then
+  // deliver the end of HEADERS and a DATA frame in one chunk.
+  IOBufQueue input{IOBufQueue::cacheChainLength()};
+  HTTPMessage req = getPostRequest(10);
+  req.getHeaders().add("x-pad", std::string(200, 'a'));
+  upstreamCodec_->generateHeader(input, streamId_, req, false);
+  const auto headersLen = input.chainLength();
+  upstreamCodec_->generateBody(
+      input, streamId_, makeBuf(10), HTTPCodec::NoPadding, true);
+
+  constexpr size_t kChunk = 7;
+  for (size_t sent = 0; headersLen - sent > kChunk; sent += kChunk) {
+    queue_.append(input.split(kChunk));
+    parse();
+    EXPECT_LE(queue_.empty() ? 0 : queue_.front()->countChainElements(), 10);
+  }
+  queue_.append(input.move());
+  parse();
+  downstreamCodec_->onIngressEOF();
+
+  EXPECT_TRUE(queue_.empty());
+  EXPECT_EQ(callbacks_.headersComplete, 1);
+  EXPECT_EQ(callbacks_.bodyLength, 10);
+  EXPECT_EQ(callbacks_.messageComplete, 1);
+  EXPECT_EQ(callbacks_.streamErrors, 0);
+  EXPECT_EQ(callbacks_.sessionErrors, 0);
+}
+
+TEST_F(HQCodecTest, HeadersFrameLargerThanHeaderListLimit) {
+  qpackDownstream_.setMaxUncompressed(37);
+  writeFrameHeaderManual(queue_, static_cast<uint64_t>(FrameType::HEADERS), 38);
+  parse();
+  EXPECT_EQ(callbacks_.messageBegin, 1);
+  EXPECT_EQ(callbacks_.streamErrors, 1);
+  EXPECT_EQ(callbacks_.sessionErrors, 0);
+  EXPECT_EQ(callbacks_.lastParseError->getHttp3ErrorCode(),
+            HTTP3::ErrorCode::HTTP_QPACK_DECOMPRESSION_FAILED);
 }
 
 struct FrameAllowedParams {

@@ -3231,6 +3231,36 @@ TEST_P(H1DownstreamSessionTest, BodyReadTimeout) {
   parseOutput();
 }
 
+TEST_P(H1DownstreamSessionTest, PipelinedReadTimeoutThenWriteTimeout) {
+  InSequence enforceOrder;
+  session_->setStreamReadTimeout(std::chrono::milliseconds(100));
+  session_->setWriteTimeout(std::chrono::milliseconds(250));
+  auto id = sendRequestHeader(getGetRequest(), true);
+  writeBuf_.append(folly::IOBuf::copyBuffer("GET / HTTP/1.1"));
+  transport_->addReadEvent(id, writeBuf_.move(), false);
+
+  auto handler1 =
+      addSimpleStrictHandler([this](folly::EventBase *evb,
+                                    HTTPSessionContextPtr /*ctx*/,
+                                    HTTPSourceHolder requestSource)
+                                 -> folly::coro::Task<HTTPSourceHolder> {
+        auto streamID =
+            co_await expectRequest(requestSource, HTTPMethod::GET, "/");
+        transport_->pauseWrites(streamID);
+        co_return HTTPFixedSource::makeFixedResponse(200, makeBuf(100000));
+      });
+  auto handler2 =
+      addSimpleStrictHandler([](folly::EventBase *evb,
+                                HTTPSessionContextPtr /*ctx*/,
+                                HTTPSourceHolder requestSource)
+                                 -> folly::coro::Task<HTTPSourceHolder> {
+        co_await expectHeaderError(requestSource, HTTPErrorCode::READ_TIMEOUT);
+        co_return HTTPFixedSource::makeFixedResponse(408, makeBuf(100));
+      });
+  evb_.loop();
+  expectedError_ = TransportErrorCode::NETWORK_ERROR;
+}
+
 TEST_P(HQDownstreamSessionTest, HeadersReadTimeout) {
   // Send an incomplete GET request.
   session_->setStreamReadTimeout(std::chrono::milliseconds(100));

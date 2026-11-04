@@ -909,6 +909,30 @@ TEST(QPACKContextTests, RejectsOverflowingRequiredInsertCount) {
       decoder, headerBlock.release(), HPACK::DecodeError::INVALID_INDEX);
 }
 
+TEST(QPACKContextTests, EncoderStreamLiteralLargerThanTable) {
+  QPACKDecoder decoder(HPACK::kTableSize);
+  HPACKEncodeBuffer partial(128, false);
+  partial.encodeInteger(100, HPACK::Q_INSERT_NO_NAME_REF);
+  EXPECT_EQ(decoder.decodeEncoderStream(partial.release()),
+            HPACK::DecodeError::NONE);
+
+  QPACKDecoder decoder2(HPACK::kTableSize);
+  HPACKEncodeBuffer tooLarge(128, false);
+  tooLarge.encodeInteger(4 * HPACK::kTableSize + 1,
+                         HPACK::Q_INSERT_NO_NAME_REF);
+  EXPECT_EQ(decoder2.decodeEncoderStream(tooLarge.release()),
+            HPACK::DecodeError::LITERAL_TOO_LARGE);
+
+  QPACKDecoder decoder3(HPACK::kTableSize);
+  HPACKEncodeBuffer bigName(128, false);
+  bigName.encodeLiteral(
+      HPACK::Q_INSERT_NO_NAME_REF.code,
+      HPACK::Q_INSERT_NO_NAME_REF.prefixLength,
+      string(HPACK::kTableSize - HPACKHeader::kMinLength + 1, 'x'));
+  EXPECT_EQ(decoder3.decodeEncoderStream(bigName.release()),
+            HPACK::DecodeError::INSERT_TOO_LARGE);
+}
+
 TEST(QPACKContextTests, DecodeErrors) {
   QPACKDecoder decoder(128);
   unique_ptr<IOBuf> buf = IOBuf::create(128);

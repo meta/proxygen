@@ -16,6 +16,8 @@
 #include <proxygen/lib/http/codec/HQUtils.h>
 #include <proxygen/lib/http/codec/compress/QPACKCodec.h>
 
+#include <limits>
+
 namespace proxygen::hq {
 
 using namespace folly;
@@ -97,6 +99,22 @@ ParseResult HQStreamCodec::checkFrameAllowed(FrameType type) {
       break;
     default:
       break;
+  }
+  return folly::none;
+}
+
+ParseResult HQStreamCodec::checkFrameLength(const FrameHeader& header) {
+  if (header.type != hq::FrameType::HEADERS &&
+      header.type != hq::FrameType::PUSH_PROMISE) {
+    return HQFramedCodec::checkFrameLength(header);
+  }
+  if (header.length > headerCodec_.getMaxUncompressed()) {
+    if (header.type == hq::FrameType::HEADERS && !finalIngressHeadersSeen_ &&
+        callback_) {
+      callback_->onMessageBegin(streamId_, nullptr);
+    }
+    setParserPaused(true);
+    onDecodeError(HPACK::DecodeError::HEADERS_TOO_LARGE);
   }
   return folly::none;
 }

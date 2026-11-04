@@ -69,14 +69,14 @@ DecodeError HPACKDecodeBuffer::decodeLiteral(uint8_t nbit,
     EOB_LOG("Could not decode literal size", result);
     return result;
   }
+  if (size > maxLiteralSize_) {
+    LOG(ERROR) << "Literal too large, size=" << size;
+    return DecodeError::LITERAL_TOO_LARGE;
+  }
   if (size > remainingBytes_) {
     EOB_LOG(folly::to<std::string>(
         "size(", size, ") > remainingBytes_(", remainingBytes_, ")"));
     return DecodeError::BUFFER_UNDERFLOW;
-  }
-  if (size > maxLiteralSize_) {
-    LOG(ERROR) << "Literal too large, size=" << size;
-    return DecodeError::LITERAL_TOO_LARGE;
   }
   const uint8_t* data;
   unique_ptr<IOBuf> tmpbuf;

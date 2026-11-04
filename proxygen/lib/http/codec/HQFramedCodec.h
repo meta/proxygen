@@ -11,6 +11,7 @@
 #include <proxygen/lib/http/codec/HQFramer.h>
 #include <proxygen/lib/http/codec/HTTPCodec.h>
 
+#include <folly/io/IOBufQueue.h>
 #include <folly/lang/Assume.h>
 
 namespace proxygen::hq {
@@ -69,6 +70,11 @@ class HQFramedCodec : public HTTPCodec {
 
   void setResumeHook(folly::Function<void()> resumeHook) {
     resumeHook_ = std::move(resumeHook);
+  }
+
+  // Invoked when ingress parsing stops with the parser paused.
+  void setPauseHook(folly::Function<void()> pauseHook) {
+    pauseHook_ = std::move(pauseHook);
   }
 
   bool isParserPaused() const override {
@@ -265,6 +271,7 @@ class HQFramedCodec : public HTTPCodec {
   }
 
   virtual ParseResult checkFrameAllowed(FrameType type) = 0;
+  virtual ParseResult checkFrameLength(const FrameHeader& header);
 
   virtual ParseResult parseData(folly::io::Cursor& /*cursor*/,
                                 const FrameHeader& /*header*/) {
@@ -337,8 +344,11 @@ class HQFramedCodec : public HTTPCodec {
   ParseResult parseFrame(folly::io::Cursor& cursor);
   bool checkConnectionError(ParseResult err, const folly::IOBuf* buf);
 
+  size_t bufferPayload(folly::io::Cursor& cursor, size_t bufLen);
+
   // Current frame state
   size_t pendingDataFrameBytes_{0};
+  folly::IOBufQueue pendingPayload_{folly::IOBufQueue::cacheChainLength()};
 
 #ifndef NDEBUG
   uint64_t receivedFrameCount_{0};
@@ -356,6 +366,7 @@ class HQFramedCodec : public HTTPCodec {
   std::string parseErrorAdditionalInfo_;
   uint64_t totalBytesParsed_{0};
   folly::Function<void()> resumeHook_;
+  folly::Function<void()> pauseHook_;
 };
 
 } // namespace proxygen::hq
