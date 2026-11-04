@@ -1223,7 +1223,11 @@ void HQSession::scheduleLoopCallback(bool thisIteration) {
   }
 }
 
-void HQSession::resumeReads(quic::StreamId streamId) {
+void HQSession::resumeReads(HQStreamTransportBase& stream) {
+  if (!sock_ || stream.readPausedForCodec_ || ingressLimitExceeded()) {
+    return;
+  }
+  auto streamId = stream.getIngressStreamId();
   VLOG(4) << __func__ << " sess=" << *this
           << ": resuming reads id=" << streamId;
   sock_->resumeRead(streamId);
@@ -1234,11 +1238,8 @@ void HQSession::resumeReads(quic::StreamId streamId) {
 
 void HQSession::resumeReads() {
   VLOG(4) << __func__ << " sess=" << *this << ": resuming reads";
-  invokeOnIngressStreams([this](HQStreamTransportBase* hqStream) {
-    if (sock_) {
-      sock_->resumeRead(hqStream->getIngressStreamId());
-    }
-  });
+  invokeOnIngressStreams(
+      [this](HQStreamTransportBase* hqStream) { resumeReads(*hqStream); });
 }
 
 void HQSession::pauseReads(quic::StreamId streamId) {
@@ -2308,6 +2309,20 @@ void HQSession::HQStreamTransportBase::initCodec(
     auto c = dynamic_cast<hq::HQStreamCodec*>(realCodec_.get());
     CHECK(c) << "HQ should use HQStream codec";
     c->setActivationHook([this] { return setActiveCodec("self"); });
+    c->setPauseHook([this] {
+      readPausedForCodec_ = true;
+      if (session_.sock_) {
+        session_.pauseReads(getIngressStreamId());
+      }
+    });
+    c->setResumeHook([this] {
+      if (readPausedForCodec_) {
+        readPausedForCodec_ = false;
+        session_.pendingProcessReadSet_.insert(getIngressStreamId());
+        session_.resumeReads(*this);
+        session_.scheduleLoopCallback();
+      }
+    });
     hqStreamCodec_ = c;
   }
   auto g = folly::makeGuard(setActiveCodec(__func__));
@@ -2635,17 +2650,6 @@ void HQSession::HQStreamTransportBase::onHeadersComplete(
   // for h1q-fb-v1 start draining on receipt of a Connection:: close header
   // if we are getting a response, transportReady has been called!
   session_.headersComplete(msg.get());
-
-  // onHeadersComplete can be triggered by data from a different stream ID
-  // - specifically, the QPACK encoder stream.  If that's true, then there may
-  // be unparsed data in HQStreamTransport.  Add this stream's id to the
-  // read set and schedule a loop callback to restart it.
-  if (session_.pendingProcessReadSet_.find(getStreamId()) ==
-          session_.pendingProcessReadSet_.end() &&
-      !readBuf_.empty()) {
-    session_.pendingProcessReadSet_.insert(getStreamId());
-    session_.scheduleLoopCallback();
-  }
 
   auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - createdTime);
@@ -3062,9 +3066,9 @@ void HQSession::HQStreamTransportBase::onError(HTTPCodec::StreamID streamID,
     return;
   }
 
-  if (!codecStreamId_ && error.hasHttpStatusCode() && streamID != 0) {
+  if (!codecStreamId_) {
     // onError before onMessageBegin
-    codecStreamId_ = streamID;
+    codecStreamId_ = codecFilterChain.createStream();
   }
 
   if (!txn_.getHandler() &&

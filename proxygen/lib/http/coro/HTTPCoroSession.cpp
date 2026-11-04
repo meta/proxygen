@@ -3170,11 +3170,16 @@ void HTTPCoroSession::handleWriteEventTimeout() {
 void HTTPCoroSession::resetOpenStreams(HTTPErrorCode error,
                                        std::string_view details) {
   // Reset all open streams
-  std::vector<StreamState*> streams;
-  for (auto& [_, stream] : streams_) {
-    streams.push_back(stream.get());
+  std::vector<HTTPCodec::StreamID> ids;
+  ids.reserve(streams_.size());
+  for (auto& [id, _] : streams_) {
+    ids.push_back(id);
   }
-  for (auto* stream : streams) {
+  for (auto id : ids) {
+    auto* stream = findStream(id);
+    if (!stream) {
+      continue;
+    }
     // Queue an ingress abort for any stream that hasn't seen EOM yet
     stream->abortIngress(error, details);
     // marks egress complete, clears queued egress, checks for detach

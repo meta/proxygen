@@ -2278,6 +2278,234 @@ TEST_P(HQDownstreamSessionTest, DelayedQPACK) {
   hqSession_->closeWhenIdle();
 }
 
+void HQDownstreamSessionTest::testQPACKBlockedReads(size_t initialBodyBytes) {
+  constexpr size_t kReadLimit = 16 * 1024;
+  constexpr size_t kChunkSize = 4096;
+  constexpr size_t kNumChunks = 64;
+  auto* session = static_cast<HQDownstreamSessionForTest*>(hqSession_);
+  session->setReadBufferLimit(kReadLimit);
+
+  const auto numChunks = kNumChunks + (initialBodyBytes > 0 ? 1 : 0);
+  const auto totalBodyBytes = kChunkSize * kNumChunks + initialBodyBytes;
+  auto req = getPostRequest(totalBodyBytes);
+  req.getHeaders().add("X-FB-Debug", "rfccffgvtvnenjkbtitkfdufddnvbecu");
+  auto id = sendRequest(req, false);
+  auto& request = getStream(id);
+  size_t bufferedBytes = 0;
+  if (initialBodyBytes > 0) {
+    bufferedBytes = request.codec->generateBody(request.buf,
+                                                request.id,
+                                                makeBuf(initialBodyBytes),
+                                                HTTPCodec::NoPadding,
+                                                false);
+  }
+  auto encoderInstructions = encoderWriteBuf_.move();
+  ASSERT_NE(encoderInstructions, nullptr);
+  flushRequestsAndLoopN(1);
+
+  auto* stream = session->findStream(id);
+  ASSERT_NE(stream, nullptr);
+  ASSERT_TRUE(stream->getCodec().isParserPaused());
+  EXPECT_EQ(stream->readBuf_.chainLength(), bufferedBytes);
+  if (initialBodyBytes > kReadLimit) {
+    EXPECT_GT(stream->readBuf_.chainLength(), kReadLimit);
+  }
+  EXPECT_TRUE(socketDriver_->isStreamPaused(id));
+  EXPECT_CALL(infoCb_, onIngressLimitExceeded(_)).Times(0);
+
+  const auto initialBytesRead = socketDriver_->streams_[id].readOffset;
+  size_t queuedBytes = 0;
+  for (size_t i = 0; i < kNumChunks; ++i) {
+    SCOPED_TRACE(i);
+    request.codec->generateBody(request.buf,
+                                request.id,
+                                makeBuf(kChunkSize),
+                                HTTPCodec::NoPadding,
+                                false);
+    queuedBytes += request.buf.chainLength();
+    flushRequestsAndLoopN(1);
+
+    EXPECT_TRUE(stream->getCodec().isParserPaused());
+    EXPECT_EQ(stream->readBuf_.chainLength(), bufferedBytes);
+    EXPECT_FALSE(session->ingressLimitExceeded());
+    const auto& socketStream = socketDriver_->streams_[id];
+    EXPECT_EQ(socketStream.readState, MockQuicSocketDriver::PAUSED);
+    EXPECT_FALSE(socketStream.error.hasValue());
+    EXPECT_EQ(socketStream.readBuf.chainLength(), queuedBytes);
+    EXPECT_EQ(socketStream.readOffset, initialBytesRead);
+  }
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders();
+  size_t bodyBytes = 0;
+  EXPECT_CALL(*handler, _onBodyWithOffset(_, _))
+      .Times(numChunks)
+      .WillRepeatedly([&](uint64_t offset, std::shared_ptr<folly::IOBuf> body) {
+        EXPECT_EQ(offset, bodyBytes);
+        bodyBytes += body->computeChainDataLength();
+      });
+  encoderWriteBuf_.append(std::move(encoderInstructions));
+  flushRequestsAndLoopN(1);
+  for (size_t i = 0; i < 10 && bodyBytes < totalBodyBytes; ++i) {
+    eventBase_.loopOnce(EVLOOP_NONBLOCK);
+  }
+  EXPECT_FALSE(stream->getCodec().isParserPaused());
+  EXPECT_TRUE(stream->readBuf_.empty());
+  EXPECT_FALSE(socketDriver_->isStreamPaused(id));
+  EXPECT_EQ(bodyBytes, totalBodyBytes);
+
+  handler->expectEOM([&] { handler->sendReplyWithBody(200, 100); });
+  handler->expectDetachTransaction();
+  request.readEOF = true;
+  flushRequestsAndLoop();
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTest, QPACKBlockedReads) {
+  testQPACKBlockedReads(0);
+}
+
+TEST_P(HQDownstreamSessionTest, QPACKBlockedReadsWithBufferedBody) {
+  testQPACKBlockedReads(4096);
+}
+
+TEST_P(HQDownstreamSessionTest, QPACKBlockedReadsWithLargeInitialBody) {
+  testQPACKBlockedReads(32 * 1024);
+}
+
+void HQDownstreamSessionTest::testQPACKBlockedReadsWithSessionLimit(
+    bool unblockQPACKFirst) {
+  constexpr size_t kReadLimit = 4096;
+  auto* session = static_cast<HQDownstreamSessionForTest*>(hqSession_);
+  session->setReadBufferLimit(kReadLimit);
+
+  auto id = sendRequest(getPostRequest(kReadLimit + 1), false);
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&] { handler->txn_->pauseIngress(); });
+  flushRequestsAndLoopN(1);
+
+  auto req = getPostRequest(10);
+  req.getHeaders().add("X-FB-Debug", "rfccffgvtvnenjkbtitkfdufddnvbecu");
+  auto blockedId = sendRequest(req, false);
+  auto encoderInstructions = encoderWriteBuf_.move();
+  ASSERT_NE(encoderInstructions, nullptr);
+  flushRequestsAndLoopN(1);
+  auto* blockedStream = session->findStream(blockedId);
+  ASSERT_NE(blockedStream, nullptr);
+  ASSERT_TRUE(blockedStream->getCodec().isParserPaused());
+  EXPECT_TRUE(socketDriver_->isStreamPaused(blockedId));
+
+  auto& request = getStream(id);
+  request.codec->generateBody(request.buf,
+                              request.id,
+                              makeBuf(kReadLimit + 1),
+                              HTTPCodec::NoPadding,
+                              false);
+  flushRequestsAndLoopN(1);
+  EXPECT_TRUE(session->ingressLimitExceeded());
+  EXPECT_TRUE(socketDriver_->isStreamPaused(id));
+
+  auto& blockedRequest = getStream(blockedId);
+  blockedRequest.codec->generateBody(blockedRequest.buf,
+                                     blockedRequest.id,
+                                     makeBuf(10),
+                                     HTTPCodec::NoPadding,
+                                     false);
+  flushRequestsAndLoopN(1);
+  const auto queuedBytes =
+      socketDriver_->streams_[blockedId].readBuf.chainLength();
+  EXPECT_GT(queuedBytes, 0);
+
+  auto blockedHandler = addSimpleStrictHandler();
+  blockedHandler->expectHeaders();
+  blockedHandler->expectBody();
+  handler->expectBody();
+  auto unblockQPACK = [&] {
+    encoderWriteBuf_.append(std::move(encoderInstructions));
+    flushRequestsAndLoopN(1);
+  };
+  if (unblockQPACKFirst) {
+    unblockQPACK();
+    EXPECT_FALSE(blockedStream->getCodec().isParserPaused());
+    EXPECT_TRUE(session->ingressLimitExceeded());
+  } else {
+    handler->txn_->resumeIngress();
+    EXPECT_TRUE(blockedStream->getCodec().isParserPaused());
+    EXPECT_FALSE(session->ingressLimitExceeded());
+  }
+  EXPECT_TRUE(socketDriver_->isStreamPaused(blockedId));
+  EXPECT_TRUE(blockedStream->readBuf_.empty());
+  EXPECT_EQ(socketDriver_->streams_[blockedId].readBuf.chainLength(),
+            queuedBytes);
+
+  if (unblockQPACKFirst) {
+    handler->txn_->resumeIngress();
+  } else {
+    unblockQPACK();
+  }
+  for (size_t i = 0;
+       i < 10 && (socketDriver_->isStreamPaused(blockedId) ||
+                  !socketDriver_->streams_[blockedId].readBuf.empty() ||
+                  !blockedStream->readBuf_.empty());
+       ++i) {
+    eventBase_.loopOnce(EVLOOP_NONBLOCK);
+  }
+  EXPECT_FALSE(socketDriver_->isStreamPaused(blockedId));
+  EXPECT_TRUE(socketDriver_->streams_[blockedId].readBuf.empty());
+  EXPECT_TRUE(blockedStream->readBuf_.empty());
+
+  handler->expectEOM([&] { handler->sendReplyWithBody(200, 100); });
+  handler->expectDetachTransaction();
+  blockedHandler->expectEOM(
+      [&] { blockedHandler->sendReplyWithBody(200, 100); });
+  blockedHandler->expectDetachTransaction();
+  request.readEOF = true;
+  blockedRequest.readEOF = true;
+  flushRequestsAndLoop();
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTest, QPACKBlockedReadsSessionLimitClearedFirst) {
+  testQPACKBlockedReadsWithSessionLimit(false);
+}
+
+TEST_P(HQDownstreamSessionTest, QPACKBlockedReadsQPACKUnblockedFirst) {
+  testQPACKBlockedReadsWithSessionLimit(true);
+}
+
+TEST_P(HQDownstreamSessionTest, QPACKUnblockedHeadersAbortClearsBufferedBody) {
+  auto req = getPostRequest(4096);
+  req.getHeaders().add("X-FB-Debug", "rfccffgvtvnenjkbtitkfdufddnvbecu");
+  auto id = sendRequest(req, false);
+  auto& request = getStream(id);
+  request.codec->generateBody(
+      request.buf, request.id, makeBuf(4096), HTTPCodec::NoPadding, false);
+  auto encoderInstructions = encoderWriteBuf_.move();
+  ASSERT_NE(encoderInstructions, nullptr);
+  flushRequestsAndLoopN(1);
+
+  auto* session = static_cast<HQDownstreamSessionForTest*>(hqSession_);
+  auto* stream = session->findStream(id);
+  ASSERT_NE(stream, nullptr);
+  ASSERT_FALSE(stream->readBuf_.empty());
+  ASSERT_TRUE(socketDriver_->isStreamPaused(id));
+
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&] { handler->txn_->sendAbort(); });
+  handler->expectDetachTransaction();
+  encoderWriteBuf_.append(std::move(encoderInstructions));
+  flushRequestsAndLoopN(1);
+  for (size_t i = 0; i < 10 && session->getNumStreams() != 0; ++i) {
+    eventBase_.loopOnce(EVLOOP_NONBLOCK);
+  }
+  EXPECT_EQ(session->getNumStreams(), 0);
+  EXPECT_EQ(session->findStream(id), nullptr);
+  if (session->getNumStreams() != 0) {
+    session->dropConnection();
+    return;
+  }
+  session->closeWhenIdle();
+}
+
 TEST_P(HQDownstreamSessionTest, cancelQPACK) {
   auto req = getGetRequest();
   req.getHeaders().add("X-FB-Debug", "rfccffgvtvnenjkbtitkfdufddnvbecu");
@@ -2300,27 +2528,66 @@ TEST_P(HQDownstreamSessionTest, cancelQPACK) {
   eventBase_.loopOnce();
 }
 
-TEST_P(HQDownstreamSessionTest, DelayedQPACKCanceled) {
+void HQDownstreamSessionTest::testDelayedQPACKCanceled(bool eof) {
   auto req = getGetRequest();
   req.getHeaders().add("X-FB-Debug", "rfccffgvtvnenjkbtitkfdufddnvbecu");
-  auto id = sendRequest(req);
+  auto id = sendRequest(req, eof);
   // This request never gets a handler
 
   auto controlStream = encoderWriteBuf_.move();
   // receive header block with unsatisfied dep
   flushRequestsAndLoopN(1);
+  EXPECT_EQ(socketDriver_->isStreamPaused(id), !eof);
 
   // cancel this request
   socketDriver_->addReadError(id,
                               HTTP3::ErrorCode::HTTP_REQUEST_CANCELLED,
                               std::chrono::milliseconds(0));
   flushRequestsAndLoopN(1);
+  for (size_t i = 0; i < 10 && hqSession_->getNumStreams() != 0; ++i) {
+    eventBase_.loopOnce(EVLOOP_NONBLOCK);
+  }
+  EXPECT_EQ(hqSession_->getNumStreams(), 0);
 
   // Now send the dependency
   encoderWriteBuf_.append(std::move(controlStream));
   flushRequestsAndLoop();
 
   // This used to crash
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTest, DelayedQPACKCanceled) {
+  testDelayedQPACKCanceled(true);
+}
+
+TEST_P(HQDownstreamSessionTest, DelayedQPACKCanceledWhilePaused) {
+  testDelayedQPACKCanceled(false);
+}
+
+TEST_P(HQDownstreamSessionTest, QPACKBlockedTimeoutClearsBufferedBody) {
+  auto req = getPostRequest(4096);
+  req.getHeaders().add("X-FB-Debug", "rfccffgvtvnenjkbtitkfdufddnvbecu");
+  auto id = sendRequest(req, false);
+  auto& request = getStream(id);
+  request.codec->generateBody(
+      request.buf, request.id, makeBuf(4096), HTTPCodec::NoPadding, false);
+  auto encoderInstructions = encoderWriteBuf_.move();
+  ASSERT_NE(encoderInstructions, nullptr);
+  flushRequestsAndLoopN(1);
+  ASSERT_TRUE(socketDriver_->isStreamPaused(id));
+
+  testing::StrictMock<MockHTTPHandler> handler;
+  EXPECT_CALL(getMockController(), getTransactionTimeoutHandler(_, _))
+      .WillOnce(Return(&handler));
+  EXPECT_CALL(handler, _setTransaction(_)).WillOnce(SaveArg<0>(&handler.txn_));
+  handler.expectError([&](const HTTPException&) { handler.txn_->sendAbort(); });
+  handler.expectDetachTransaction();
+  eventBase_.loop();
+  EXPECT_EQ(hqSession_->getNumStreams(), 0);
+
+  encoderWriteBuf_.append(std::move(encoderInstructions));
+  flushRequestsAndLoop();
   hqSession_->closeWhenIdle();
 }
 
@@ -2440,6 +2707,33 @@ TEST_P(ControlStreamsStallTest, StalledQpackStream) {
   EXPECT_NE(socketDriver_->streams_[6].peekCB, nullptr);
 
   // Close the session; all good.
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTest, OversizedHeadersFrameHeader) {
+  hqSession_->setEgressSettings({{SettingsId::MAX_HEADER_LIST_SIZE, 60}});
+  auto id = nextStreamId();
+  auto res = requests_.emplace(std::piecewise_construct,
+                               std::forward_as_tuple(id),
+                               std::forward_as_tuple(makeCodec(id)));
+  auto& request = res.first->second;
+  request.id = request.codec->createStream();
+  request.readEOF = false;
+  hq::writeFrameHeader(request.buf, hq::FrameType::HEADERS, 61);
+
+  testing::StrictMock<MockHTTPHandler> errHandler;
+  EXPECT_CALL(getMockController(), getParseErrorHandler(_, _, _))
+      .WillOnce(Return(&errHandler));
+  EXPECT_CALL(errHandler, _setTransaction(testing::_))
+      .WillOnce(testing::SaveArg<0>(&errHandler.txn_));
+  errHandler.expectError([&errHandler](const HTTPException& ex) {
+    EXPECT_EQ(ex.getHttp3ErrorCode(),
+              (uint32_t)HTTP3::ErrorCode::HTTP_QPACK_DECOMPRESSION_FAILED);
+    errHandler.sendReplyWithBody(400, 100);
+  });
+  errHandler.expectDetachTransaction();
+  flushRequestsAndLoop();
+  EXPECT_GT(socketDriver_->streams_[id].writeBuf.chainLength(), 30);
   hqSession_->closeWhenIdle();
 }
 

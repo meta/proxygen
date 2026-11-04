@@ -159,6 +159,7 @@ class HQStreamCodec
 
  protected:
   ParseResult checkFrameAllowed(FrameType type) override;
+  ParseResult checkFrameLength(const FrameHeader& header) override;
   ParseResult parseData(folly::io::Cursor& cursor,
                         const FrameHeader& header) override;
   ParseResult parseHeaders(folly::io::Cursor& cursor,

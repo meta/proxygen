@@ -71,6 +71,13 @@ void createControlStream(quic::MockQuicSocketDriver* socketDriver,
                          quic::StreamId id,
                          proxygen::hq::UnidirectionalStreamType streamType);
 
+class HQDownstreamSessionForTest : public proxygen::HQDownstreamSession {
+ public:
+  using HQDownstreamSession::HQDownstreamSession;
+  using HQSession::findStream;
+  using HTTPSessionBase::ingressLimitExceeded;
+};
+
 class HQSessionTest
     : public testing::TestWithParam<TestParams>
     , public quic::MockQuicSocketDriver::LocalAppCallback
@@ -103,7 +110,7 @@ class HQSessionTest
 
   {
     if (direction_ == proxygen::TransportDirection::DOWNSTREAM) {
-      hqSession_ = new proxygen::HQDownstreamSession(
+      hqSession_ = new HQDownstreamSessionForTest(
           std::chrono::milliseconds(kTransactionTimeout),
           &controllerContainer_.mockController,
           proxygen::mockTransportInfo,

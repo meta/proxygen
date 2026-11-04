@@ -14,12 +14,67 @@
 #include <folly/io/Cursor.h>
 #include <folly/tracing/ScopedTraceSection.h>
 
+#include <algorithm>
 #include <iomanip>
+#include <limits>
 
 namespace proxygen::hq {
 
 using namespace folly::io;
 using namespace folly;
+
+namespace {
+// CANCEL_PUSH, GOAWAY and MAX_PUSH_ID carry a single varint.
+constexpr uint64_t kMaxIdFrameLength = 8;
+constexpr uint64_t kMaxControlFrameLength = 4096;
+// Partial frames in longer chains are copied to keep rescans short.
+constexpr size_t kMaxPendingChainElements = 10;
+constexpr size_t kPendingPayloadAllocSize = 4096;
+
+// folly::none for frame types that are skipped.
+folly::Optional<uint64_t> maxFrameLength(FrameType type) {
+  switch (type) {
+    case FrameType::DATA:
+    case FrameType::HEADERS:
+    case FrameType::PUSH_PROMISE:
+      return std::numeric_limits<uint64_t>::max();
+    case FrameType::CANCEL_PUSH:
+    case FrameType::GOAWAY:
+    case FrameType::MAX_PUSH_ID:
+      return kMaxIdFrameLength;
+    case FrameType::SETTINGS:
+    case FrameType::PRIORITY_UPDATE:
+    case FrameType::PUSH_PRIORITY_UPDATE:
+    case FrameType::FB_PRIORITY_UPDATE:
+    case FrameType::FB_PUSH_PRIORITY_UPDATE:
+      return kMaxControlFrameLength;
+    case FrameType::PADDING:
+    case FrameType::WEBTRANSPORT_BIDI:
+    default:
+      return folly::none;
+  }
+}
+} // namespace
+
+ParseResult HQFramedCodec::checkFrameLength(const FrameHeader& header) {
+  if (header.length > maxFrameLength(header.type).value_or(0)) {
+    setParseErrorContext(
+        "frame-too-large",
+        folly::to<std::string>("type=", getFrameTypeString(header.type)));
+    return HTTP3::ErrorCode::HTTP_FRAME_ERROR;
+  }
+  return folly::none;
+}
+
+size_t HQFramedCodec::bufferPayload(Cursor& cursor, size_t bufLen) {
+  const uint64_t missing = curHeader_.length - pendingPayload_.chainLength();
+  const size_t toCopy = std::min<uint64_t>(missing, bufLen);
+  QueueAppender appender(&pendingPayload_,
+                         std::min<uint64_t>(missing, kPendingPayloadAllocSize));
+  appender.push(cursor, toCopy);
+  cursor.skip(toCopy);
+  return toCopy;
+}
 
 ParseResult HQFramedCodec::parseFrame(Cursor& cursor) {
   switch (curHeader_.type) {
@@ -43,25 +98,15 @@ ParseResult HQFramedCodec::parseFrame(Cursor& cursor) {
     case hq::FrameType::FB_PUSH_PRIORITY_UPDATE:
       return parsePriorityUpdate(cursor, curHeader_);
     default:
-      // Implementations MUST ignore and discard any frame that has a
-      // type that is unknown
-      if (callback_) {
-        callback_->onUnknownFrame(streamId_,
-                                  static_cast<uint64_t>(curHeader_.type));
-      }
-      break;
+      LOG(DFATAL) << "Unparsed frame type=" << curHeader_.type;
+      cursor.skip(curHeader_.length);
+      return folly::none;
   }
-
-  VLOG(3) << "Skipping frame (type=" << (uint64_t)curHeader_.type << ")";
-  cursor.skip(curHeader_.length);
-  return folly::none;
 }
 
 size_t HQFramedCodec::onFramedIngress(const IOBuf& buf) {
   FOLLY_SCOPED_TRACE_SECTION("HQFramedCodec - onFramedIngress");
-  // if for some reason onFramedIngress gets called again after erroring out,
-  // skip parsing
-  if (connError_ != folly::none) {
+  if (connError_ != folly::none || parserPaused_) {
     return 0;
   }
   Cursor cursor(&buf);
@@ -111,40 +156,62 @@ size_t HQFramedCodec::onFramedIngress(const IOBuf& buf) {
       receivedFrameCount_++;
 #endif
       pendingDataFrameBytes_ = curHeader_.length;
-      if (curHeader_.length == 0) {
+      if (!maxFrameLength(curHeader_.type)) {
+        // Implementations MUST ignore and discard any frame that has a
+        // type that is unknown
+        if (callback_) {
+          callback_->onUnknownFrame(streamId_,
+                                    static_cast<uint64_t>(curHeader_.type));
+        }
+        frameState_ = curHeader_.length == 0
+                          ? FrameState::FRAME_HEADER_TYPE
+                          : FrameState::FRAME_PAYLOAD_STREAMING;
+      } else if (curHeader_.length == 0) {
         // If the frame length is zero, call parseFrame immediately.  It is up
         // to each frame to determine whether length 0 is valid.
         connError_ = parseFrame(cursor);
         frameState_ = FrameState::FRAME_HEADER_TYPE;
+      } else if (curHeader_.type == FrameType::DATA) {
+        frameState_ = FrameState::FRAME_PAYLOAD_STREAMING;
       } else {
-        // For DATA frames, move to the streaming state
-        if (curHeader_.type == FrameType::DATA) {
-          frameState_ = FrameState::FRAME_PAYLOAD_STREAMING;
-        } else {
-          frameState_ = FrameState::FRAME_PAYLOAD;
-        }
+        connError_ = checkFrameLength(curHeader_);
+        frameState_ = FrameState::FRAME_PAYLOAD;
       }
     } else if (frameState_ == FrameState::FRAME_PAYLOAD) {
       // Already parsed the common frame header
       const auto frameLen = curHeader_.length;
-      if (bufLen >= frameLen) {
+      if (pendingPayload_.empty() && bufLen >= frameLen) {
         connError_ = parseFrame(cursor);
         // if connError_ is set, it means there was a frame error,
         // so it doesn't really matter whether we have actually parsed all the
         // data or not
         parsed += curHeader_.length;
         frameState_ = FrameState::FRAME_HEADER_TYPE;
-      } else {
+      } else if (pendingPayload_.empty() &&
+                 buf.countChainElements() <= kMaxPendingChainElements) {
         break;
+      } else {
+        parsed += bufferPayload(cursor, bufLen);
+        if (pendingPayload_.chainLength() == frameLen) {
+          auto payload = pendingPayload_.move();
+          Cursor payloadCursor(payload.get());
+          connError_ = parseFrame(payloadCursor);
+          frameState_ = FrameState::FRAME_HEADER_TYPE;
+        }
       }
     } else if (bufLen > 0 &&
                frameState_ == FrameState::FRAME_PAYLOAD_STREAMING) {
-      FrameHeader auxDataFrameHeader;
-      auxDataFrameHeader.type = FrameType::DATA;
-      auxDataFrameHeader.length = std::min(pendingDataFrameBytes_, bufLen);
-      connError_ = parseData(cursor, auxDataFrameHeader);
-      parsed += auxDataFrameHeader.length;
-      pendingDataFrameBytes_ -= auxDataFrameHeader.length;
+      const auto chunkLen = std::min(pendingDataFrameBytes_, bufLen);
+      if (curHeader_.type == FrameType::DATA) {
+        FrameHeader auxDataFrameHeader;
+        auxDataFrameHeader.type = FrameType::DATA;
+        auxDataFrameHeader.length = chunkLen;
+        connError_ = parseData(cursor, auxDataFrameHeader);
+      } else {
+        cursor.skip(chunkLen);
+      }
+      parsed += chunkLen;
+      pendingDataFrameBytes_ -= chunkLen;
       if (pendingDataFrameBytes_ == 0) {
         frameState_ = FrameState::FRAME_HEADER_TYPE;
       }
@@ -154,7 +221,9 @@ size_t HQFramedCodec::onFramedIngress(const IOBuf& buf) {
     parsedTot += parsed;
     totalBytesParsed_ += parsed;
   }
-  checkConnectionError(connError_, &buf);
+  if (!checkConnectionError(connError_, &buf) && parserPaused_ && pauseHook_) {
+    pauseHook_();
+  }
   return parsedTot;
 }
 

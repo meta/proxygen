@@ -131,6 +131,10 @@ class HQDownstreamSessionTest : public HQSessionTest {
   void SetUpBase();
   void SetUpOnTransportReady();
 
+  void testQPACKBlockedReads(size_t initialBodyBytes);
+  void testQPACKBlockedReadsWithSessionLimit(bool unblockQPACKFirst);
+  void testDelayedQPACKCanceled(bool eof);
+
   template <class HandlerType>
   std::unique_ptr<testing::StrictMock<HandlerType>>
   addSimpleStrictHandlerBase();

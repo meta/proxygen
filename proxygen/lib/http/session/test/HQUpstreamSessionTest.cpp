@@ -344,6 +344,40 @@ TEST_P(HQUpstreamSessionTest, GetWithTrailers) {
   hqSession_->closeWhenIdle();
 }
 
+TEST_P(HQUpstreamSessionTest, QPACKBlockedTrailersResumeReads) {
+  auto handler = openTransaction();
+  handler->txn_->sendHeadersWithEOM(getGetRequest());
+  handler->expectHeaders();
+  handler->expectBody();
+  auto resp = makeResponse(200, 100);
+  auto id = handler->txn_->getID();
+  sendResponse(id, *std::get<0>(resp), std::move(std::get<1>(resp)), false);
+  flushAndLoopN(1);
+
+  auto& stream = streams_.at(id);
+  HTTPHeaders trailers;
+  trailers.add("x-trailer", "qpack-blocked-trailer");
+  stream.codec->generateTrailers(stream.buf, stream.codecId, trailers);
+  auto encoderInstructions = encoderWriteBuf_.move();
+  ASSERT_NE(encoderInstructions, nullptr);
+  flushAndLoopN(1);
+  EXPECT_TRUE(socketDriver_->isStreamPaused(id));
+
+  stream.readEOF = true;
+  flushAndLoopN(1);
+  stream.readEOF = false;
+  EXPECT_TRUE(socketDriver_->isStreamPaused(id));
+
+  handler->expectTrailers();
+  handler->expectEOM();
+  handler->expectDetachTransaction();
+  encoderWriteBuf_.append(std::move(encoderInstructions));
+  flushAndLoop();
+  EXPECT_EQ(socketDriver_->streams_[id].readState,
+            MockQuicSocketDriver::CLOSED);
+  hqSession_->closeWhenIdle();
+}
+
 TEST_P(HQUpstreamSessionTest, AbortOnBodyWithBlockedQPACKTrailers) {
   auto handler = openTransaction();
   auto req = getGetRequest();
@@ -371,6 +405,7 @@ TEST_P(HQUpstreamSessionTest, AbortOnBodyWithBlockedQPACKTrailers) {
   auto control2 = encoderWriteBuf_.move();
   encoderWriteBuf_.append(std::move(control1));
   flushAndLoopN(1);
+  stream.readEOF = false;
   encoderWriteBuf_.append(std::move(control2));
 
   flushAndLoop();

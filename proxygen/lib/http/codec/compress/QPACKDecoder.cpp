@@ -10,6 +10,9 @@
 
 #include <proxygen/lib/http/codec/compress/HPACKEncodeBuffer.h>
 
+#include <algorithm>
+#include <limits>
+
 using folly::io::Cursor;
 
 namespace {
@@ -201,10 +204,14 @@ HPACK::DecodeError QPACKDecoder::decodeEncoderStream(
     std::unique_ptr<folly::IOBuf> buf) {
   ingress_.append(std::move(buf));
   Cursor cursor(ingress_.front());
-  HPACKDecodeBuffer dbuf(cursor,
-                         ingress_.chainLength(),
-                         maxUncompressed_,
-                         /* endOfBufferIsError=*/false);
+  // Every inserted literal must fit in the dynamic table. A Huffman code is at
+  // most 30 bits, so the encoded form can be up to 4x the decoded size.
+  HPACKDecodeBuffer dbuf(
+      cursor,
+      ingress_.chainLength(),
+      uint32_t(std::min<uint64_t>(uint64_t(maxTableSize_) * 4,
+                                  std::numeric_limits<uint32_t>::max())),
+      /* endOfBufferIsError=*/false);
 
   VLOG(6) << "Decoding control block";
   baseIndex_ = 0;
@@ -319,6 +326,12 @@ uint32_t QPACKDecoder::decodeLiteralHeaderQ(
       }
       if (err_ != HPACK::DecodeError::NONE) {
         LOG(ERROR) << "Error decoding header name err_=" << err_;
+        return 0;
+      }
+      if (indexing &&
+          headerName.size() + HPACKHeader::kMinLength > table_.capacity()) {
+        LOG(ERROR) << "Encoder inserted a name larger than capacity";
+        err_ = HPACK::DecodeError::INSERT_TOO_LARGE;
         return 0;
       }
       partial->header.name = HPACKHeaderName{headerName};
