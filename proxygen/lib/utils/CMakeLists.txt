@@ -146,7 +146,6 @@ proxygen_add_library(proxygen_utils_time_util
 
 proxygen_add_library(proxygen_utils_trace
   SRCS
-    ConnectionTelemetryBridge.cpp
     TraceEvent.cpp
     TraceEventContext.cpp
   DEPS
