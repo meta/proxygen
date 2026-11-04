@@ -157,6 +157,7 @@ target_link_libraries(proxygen
   PUBLIC
     mvfst::mvfst_transport
     mvfst::mvfst_client
+    mvfst::mvfst_client_cached_server_tp_serialization
     mvfst::mvfst_fizz_client
     mvfst::mvfst_server
     mvfst::mvfst_codec_types
