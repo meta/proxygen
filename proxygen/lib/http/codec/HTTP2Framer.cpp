@@ -228,31 +228,8 @@ bool isValidFrameType(FrameType type) {
   if (val < kMinExperimentalFrameType) {
     return val <= static_cast<uint8_t>(FrameType::ALTSVC) ||
            type == FrameType::PADDING || type == FrameType::RFC9218_PRIORITY;
-  } else {
-    switch (type) {
-      case FrameType::CERTIFICATE_REQUEST:
-      case FrameType::CERTIFICATE:
-        return true;
-      // The following enums fall through to default (return false):
-      case FrameType::CERTIFICATE_NEEDED:
-      case FrameType::USE_CERTIFICATE:
-      case FrameType::DATA:
-      case FrameType::HEADERS:
-      case FrameType::PRIORITY:
-      case FrameType::RST_STREAM:
-      case FrameType::SETTINGS:
-      case FrameType::PUSH_PROMISE:
-      case FrameType::PING:
-      case FrameType::GOAWAY:
-      case FrameType::WINDOW_UPDATE:
-      case FrameType::CONTINUATION:
-      case FrameType::ALTSVC:
-      case FrameType::RFC9218_PRIORITY:
-      case FrameType::PADDING:
-      default:
-        return false;
-    }
   }
+  return false;
 }
 
 bool frameAffectsCompression(FrameType t) {
@@ -523,48 +500,6 @@ ErrorCode parseAltSvc(Cursor& cursor,
   return ErrorCode::NO_ERROR;
 }
 
-ErrorCode parseCertificateRequest(
-    folly::io::Cursor& cursor,
-    const FrameHeader& header,
-    uint16_t& outRequestId,
-    std::unique_ptr<folly::IOBuf>& outAuthRequest) noexcept {
-  DCHECK_LE(header.length, cursor.totalLength());
-  if (header.length < kFrameCertificateRequestSizeBase) {
-    return ErrorCode::FRAME_SIZE_ERROR;
-  }
-  if (header.stream != 0) {
-    return ErrorCode::PROTOCOL_ERROR;
-  }
-  outRequestId = cursor.readBE<uint16_t>();
-  auto length = header.length;
-  length -= kFrameCertificateRequestSizeBase;
-  if (length > 0) {
-    cursor.clone(outAuthRequest, length);
-  }
-  return ErrorCode::NO_ERROR;
-}
-
-ErrorCode parseCertificate(
-    folly::io::Cursor& cursor,
-    const FrameHeader& header,
-    uint16_t& outCertId,
-    std::unique_ptr<folly::IOBuf>& outAuthenticator) noexcept {
-  DCHECK_LE(header.length, cursor.totalLength());
-  if (header.length < kFrameCertificateSizeBase) {
-    return ErrorCode::FRAME_SIZE_ERROR;
-  }
-  if (header.stream != 0) {
-    return ErrorCode::PROTOCOL_ERROR;
-  }
-  outCertId = cursor.readBE<uint16_t>();
-  auto length = header.length;
-  length -= kFrameCertificateSizeBase;
-  if (length > 0) {
-    cursor.clone(outAuthenticator, length);
-  }
-  return ErrorCode::NO_ERROR;
-}
-
 //// Egress ////
 
 size_t writeData(IOBufQueue& queue,
@@ -831,47 +766,6 @@ size_t writeAltSvc(IOBufQueue& queue,
   return kFrameHeaderSize + frameLen;
 }
 
-size_t writeCertificateRequest(folly::IOBufQueue& writeBuf,
-                               uint16_t requestId,
-                               std::unique_ptr<folly::IOBuf> authRequest) {
-  const auto dataLen = authRequest ? kFrameCertificateRequestSizeBase +
-                                         authRequest->computeChainDataLength()
-                                   : kFrameCertificateRequestSizeBase;
-  // The CERTIFICATE_REQUEST frame must be sent on stream 0.
-  const auto frameLen = writeFrameHeader(writeBuf,
-                                         dataLen,
-                                         FrameType::CERTIFICATE_REQUEST,
-                                         0,
-                                         0,
-                                         kNoPadding,
-                                         nullptr);
-  QueueAppender appender(&writeBuf, frameLen);
-  appender.writeBE<uint16_t>(requestId);
-  writeBuf.append(std::move(authRequest));
-  return kFrameHeaderSize + frameLen;
-}
-
-size_t writeCertificate(folly::IOBufQueue& writeBuf,
-                        uint16_t certId,
-                        std::unique_ptr<folly::IOBuf> authenticator,
-                        bool toBeContinued) {
-  uint8_t flags = 0;
-  if (toBeContinued) {
-    flags |= TO_BE_CONTINUED;
-  }
-  const auto dataLen =
-      authenticator
-          ? kFrameCertificateSizeBase + authenticator->computeChainDataLength()
-          : kFrameCertificateSizeBase;
-  // The CERTIFICATE_REQUEST frame must be sent on stream 0.
-  const auto frameLen = writeFrameHeader(
-      writeBuf, dataLen, FrameType::CERTIFICATE, flags, 0, kNoPadding, nullptr);
-  QueueAppender appender(&writeBuf, frameLen);
-  appender.writeBE<uint16_t>(certId);
-  writeBuf.append(std::move(authenticator));
-  return kFrameHeaderSize + frameLen;
-}
-
 const char* getFrameTypeString(FrameType type) {
   switch (type) {
     case FrameType::DATA:
@@ -900,14 +794,6 @@ const char* getFrameTypeString(FrameType type) {
       return "RFC9218_PRIORITY";
     case FrameType::PADDING:
       return "PADDING";
-    case FrameType::CERTIFICATE_REQUEST:
-      return "CERTIFICATE_REQUEST";
-    case FrameType::CERTIFICATE:
-      return "CERTIFICATE";
-    case FrameType::CERTIFICATE_NEEDED:
-      return "CERTIFICATE_NEEDED";
-    case FrameType::USE_CERTIFICATE:
-      return "USE_CERTIFICATE";
     default:
       // can happen when type was cast from uint8_t
       return "Unknown";

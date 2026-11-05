@@ -46,13 +46,6 @@ enum class FrameType : uint8_t {
   RFC9218_PRIORITY = 16,
   PADDING = 0xbb, // not in current draft, nor likely to ever be used, so will
                   // be ignored
-
-  // For secondary certificate authentication in HTTP/2 as specified in the
-  // draft-ietf-httpbis-http2-secondary-certs-02.
-  CERTIFICATE_REQUEST = 0xf0,
-  CERTIFICATE = 0xf1,
-  CERTIFICATE_NEEDED = 0xf2,
-  USE_CERTIFICATE = 0xf3,
 };
 
 enum Flags {
@@ -63,10 +56,6 @@ enum Flags {
   PRIORITY = 0x20,
   // experimental flag for EX stream only
   UNIDIRECTIONAL = 0x40,
-
-  // for secondary certificate authentication frames
-  UNSOLICITED = 0x1,
-  TO_BE_CONTINUED = 0x1,
 };
 
 struct FrameHeader {
@@ -320,42 +309,6 @@ ErrorCode parseAltSvc(folly::io::Cursor& cursor,
                       std::string& outHost,
                       std::string& outOrigin) noexcept;
 
-/**
- * This function parses the section of the CERTIFICATE_REQUEST frame after the
- * common frame header.  It pulls header.length bytes from the cursor, so it is
- * the caller's responsibility to ensure there is enough data available.
- *
- * @param cursor The cursor to pull data from.
- * @param header The frame header for the frame being parsed.
- * @param outRequestId The Request-ID identifying this certificate request.
- * @param outAuthRequest Authenticator request in the frame, if any.
- * @return NO_ERROR for successful parse. The connection error code to
- *         return in a CERTIFICATE_REQUEST frame if failure.
- */
-ErrorCode parseCertificateRequest(
-    folly::io::Cursor& cursor,
-    const FrameHeader& header,
-    uint16_t& outRequestId,
-    std::unique_ptr<folly::IOBuf>& outAuthRequest) noexcept;
-
-/**
- * This function parses the section of the CERTIFICATE frame after the
- * common frame header.  It pulls header.length bytes from the cursor, so it is
- * the caller's responsibility to ensure there is enough data available.
- *
- * @param cursor The cursor to pull data from.
- * @param header The frame header for the frame being parsed.
- * @param outCertId The Cert-ID identifying the frame.
- * @param outAuthenticator Authenticator fragment in the frame, if any.
- * @return NO_ERROR for successful parse. The connection error code to
- *         return in a CERTIFICATE frame if failure.
- */
-ErrorCode parseCertificate(
-    folly::io::Cursor& cursor,
-    const FrameHeader& header,
-    uint16_t& outCertId,
-    std::unique_ptr<folly::IOBuf>& outAuthenticator) noexcept;
-
 //// Egress ////
 
 /**
@@ -560,39 +513,6 @@ size_t writeAltSvc(folly::IOBufQueue& writeBuf,
                    folly::StringPiece protocol,
                    folly::StringPiece host,
                    folly::StringPiece origin) noexcept;
-
-/**
- * Generate an entire CERTIFICATE_REQUEST frame, including the common frame
- * header.
- *
- * @param writeBuf The output queue to write to. It may grow or add
- *                 underlying buffers inside this function.
- * @param requestId The opaque Request-ID of this used to correlate subsequent
- *                  certificate-related frames with this request.
- * @param authRequest The encoded authenticator request.
- * @return The number of bytes written to writeBuf.
- */
-size_t writeCertificateRequest(folly::IOBufQueue& writeBuf,
-                               uint16_t requestId,
-                               std::unique_ptr<folly::IOBuf> authRequest);
-
-/**
- * Generate an entire CERTIFICATE frame, including the common frame
- * header.
- *
- * @param writeBuf The output queue to write to. It may grow or add
- *                 underlying buffers inside this function.
- * @param certId The opaque Cert-ID of this frame which is used to correlate
- * subsequent certificate-related frames with this certificate.
- * @param authenticator The encoded authenticator fragment.
- * @param toBeContinued Indicates whether there is additional authenticator
- * fragment.
- * @return The number of bytes written to writeBuf.
- */
-size_t writeCertificate(folly::IOBufQueue& writeBuf,
-                        uint16_t certId,
-                        std::unique_ptr<folly::IOBuf> authenticator,
-                        bool toBeContinued);
 
 /**
  * Generate a padding frame, using an unused reserved frame type, which the

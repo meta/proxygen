@@ -251,10 +251,6 @@ ErrorCode HTTP2Codec::parseFrame(folly::io::Cursor& cursor) {
     // The following frame types are defined in the enum but not handled here:
     case http2::FrameType::PRIORITY:
     case http2::FrameType::PADDING:
-    case http2::FrameType::CERTIFICATE_REQUEST:
-    case http2::FrameType::CERTIFICATE:
-    case http2::FrameType::CERTIFICATE_NEEDED:
-    case http2::FrameType::USE_CERTIFICATE:
     default:
       // Implementations MUST ignore and discard any frame that has a
       // type that is unknown or unhandled
