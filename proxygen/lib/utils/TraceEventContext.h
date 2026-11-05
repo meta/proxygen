@@ -9,7 +9,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 namespace proxygen {
@@ -21,25 +20,19 @@ class TraceEventContext {
  public:
   // Optional parent id for all sub trace events to add.
   uint32_t parentID;
-  std::optional<int64_t> requestID;
 
   TraceEventContext(uint32_t pID,
                     std::vector<TraceEventObserver*> observers,
-                    bool allTraceEventNeeded = false,
-                    std::optional<int64_t> reqID = std::nullopt)
+                    bool allTraceEventNeeded = false)
       : parentID(pID),
-        requestID(reqID),
         observers_(std::move(observers)),
         allTraceEventNeeded_(allTraceEventNeeded) {
   }
 
   explicit TraceEventContext(uint32_t pID = 0,
                              TraceEventObserver* observer = nullptr,
-                             bool allTraceEventNeeded = false,
-                             std::optional<int64_t> reqID = std::nullopt)
-      : parentID(pID),
-        requestID(reqID),
-        allTraceEventNeeded_(allTraceEventNeeded) {
+                             bool allTraceEventNeeded = false)
+      : parentID(pID), allTraceEventNeeded_(allTraceEventNeeded) {
     if (observer) {
       observers_.push_back(observer);
     }
