@@ -226,7 +226,7 @@ ErrorCode skipPadding(Cursor& cursor, uint8_t length, bool verify) {
 bool isValidFrameType(FrameType type) {
   auto val = static_cast<uint8_t>(type);
   if (val < kMinExperimentalFrameType) {
-    return val <= static_cast<uint8_t>(FrameType::ALTSVC) ||
+    return val <= static_cast<uint8_t>(FrameType::CONTINUATION) ||
            type == FrameType::PADDING || type == FrameType::RFC9218_PRIORITY;
   }
   return false;
@@ -465,38 +465,6 @@ ErrorCode parseContinuation(Cursor& cursor,
     return ErrorCode::PROTOCOL_ERROR;
   }
   cursor.clone(outBuf, header.length);
-  return ErrorCode::NO_ERROR;
-}
-
-ErrorCode parseAltSvc(Cursor& cursor,
-                      const FrameHeader& header,
-                      uint32_t& outMaxAge,
-                      uint32_t& outPort,
-                      std::string& outProtocol,
-                      std::string& outHost,
-                      std::string& outOrigin) noexcept {
-  DCHECK_LE(header.length, cursor.totalLength());
-  if (header.length < kFrameAltSvcSizeBase) {
-    return ErrorCode::FRAME_SIZE_ERROR;
-  }
-  std::unique_ptr<IOBuf> tmpBuf;
-
-  outMaxAge = cursor.readBE<uint32_t>();
-  outPort = cursor.readBE<uint16_t>();
-  const auto protoLen = cursor.readBE<uint8_t>();
-  if (header.length < kFrameAltSvcSizeBase + protoLen) {
-    return ErrorCode::FRAME_SIZE_ERROR;
-  }
-  outProtocol = cursor.readFixedString(protoLen);
-  const auto hostLen = cursor.readBE<uint8_t>();
-  if (header.length < kFrameAltSvcSizeBase + protoLen + hostLen) {
-    return ErrorCode::FRAME_SIZE_ERROR;
-  }
-  outHost = cursor.readFixedString(hostLen);
-  const auto originLen =
-      (header.length - kFrameAltSvcSizeBase - protoLen - hostLen);
-  outOrigin = cursor.readFixedString(originLen);
-
   return ErrorCode::NO_ERROR;
 }
 
@@ -741,31 +709,6 @@ size_t writeContinuation(IOBufQueue& queue,
   return kFrameHeaderSize + frameLen;
 }
 
-size_t writeAltSvc(IOBufQueue& queue,
-                   uint32_t stream,
-                   uint32_t maxAge,
-                   uint16_t port,
-                   StringPiece protocol,
-                   StringPiece host,
-                   StringPiece origin) noexcept {
-  const auto protoLen = protocol.size();
-  const auto hostLen = host.size();
-  const auto originLen = origin.size();
-  const auto frameLen = protoLen + hostLen + originLen + kFrameAltSvcSizeBase;
-
-  writeFrameHeader(
-      queue, frameLen, FrameType::ALTSVC, 0, stream, kNoPadding, nullptr);
-  QueueAppender appender(&queue, frameLen);
-  appender.writeBE<uint32_t>(maxAge);
-  appender.writeBE<uint16_t>(port);
-  appender.writeBE<uint8_t>(static_cast<uint8_t>(protoLen));
-  appender.push(reinterpret_cast<const uint8_t*>(protocol.data()), protoLen);
-  appender.writeBE<uint8_t>(static_cast<uint8_t>(hostLen));
-  appender.push(reinterpret_cast<const uint8_t*>(host.data()), hostLen);
-  appender.push(reinterpret_cast<const uint8_t*>(origin.data()), originLen);
-  return kFrameHeaderSize + frameLen;
-}
-
 const char* getFrameTypeString(FrameType type) {
   switch (type) {
     case FrameType::DATA:
@@ -788,8 +731,6 @@ const char* getFrameTypeString(FrameType type) {
       return "WINDOW_UPDATE";
     case FrameType::CONTINUATION:
       return "CONTINUATION";
-    case FrameType::ALTSVC:
-      return "ALTSVC";
     case FrameType::RFC9218_PRIORITY:
       return "RFC9218_PRIORITY";
     case FrameType::PADDING:

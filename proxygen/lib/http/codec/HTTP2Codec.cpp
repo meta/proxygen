@@ -243,9 +243,6 @@ ErrorCode HTTP2Codec::parseFrame(folly::io::Cursor& cursor) {
       return parseWindowUpdate(cursor);
     case http2::FrameType::CONTINUATION:
       return parseContinuation(cursor);
-    case http2::FrameType::ALTSVC:
-      // fall through, unimplemented
-      break;
     case http2::FrameType::RFC9218_PRIORITY:
       return parseRFC9218Priority(cursor);
     // The following frame types are defined in the enum but not handled here:

@@ -42,7 +42,6 @@ enum class FrameType : uint8_t {
   GOAWAY = 7,
   WINDOW_UPDATE = 8,
   CONTINUATION = 9,
-  ALTSVC = 10, // not in current draft so frame type has not been assigned
   RFC9218_PRIORITY = 16,
   PADDING = 0xbb, // not in current draft, nor likely to ever be used, so will
                   // be ignored
@@ -286,29 +285,6 @@ ErrorCode parseContinuation(folly::io::Cursor& cursor,
                             const FrameHeader& header,
                             std::unique_ptr<folly::IOBuf>& outBuf) noexcept;
 
-/**
- * This function parses the section of the ALTSVC frame after the
- * common frame header. The caller must ensure there is header.length
- * bytes available in the cursor.
- *
- * @param cursor The cursor to pull data from.
- * @param header The frame header for the frame being parsed.
- * @param outMaxAge The max age field.
- * @param outPort The port the alternative service is on.
- * @param outProtocol The alternative service protocol string.
- * @param outHost The alternative service host name.
- * @param outOrigin The origin the alternative service is applicable to.
- * @return NO_ERROR for successful parse. The connection error code to
- *         return in a GOAWAY frame if failure.
- */
-ErrorCode parseAltSvc(folly::io::Cursor& cursor,
-                      const FrameHeader& header,
-                      uint32_t& outMaxAge,
-                      uint32_t& outPort,
-                      std::string& outProtocol,
-                      std::string& outHost,
-                      std::string& outOrigin) noexcept;
-
 //// Egress ////
 
 /**
@@ -492,27 +468,6 @@ size_t writeContinuation(folly::IOBufQueue& queue,
                          uint32_t stream,
                          bool endHeaders,
                          std::unique_ptr<folly::IOBuf> headers) noexcept;
-/**
- * Generate an entire ALTSVC frame, including the common frame
- * header.
- *
- * @param writeBuf The output queue to write to. It may grow or add
- *                 underlying buffers inside this function.
- * @param stream The stream to do Alt-Svc on. May be zero.
- * @param maxAge The max age field.
- * @param port The port the alternative service is on.
- * @param protocol The alternative service protocol string.
- * @param host The alternative service host name.
- * @param origin The origin the alternative service is applicable to.
- * @return The number of bytes written to writeBuf.
- */
-size_t writeAltSvc(folly::IOBufQueue& writeBuf,
-                   uint32_t stream,
-                   uint32_t maxAge,
-                   uint16_t port,
-                   folly::StringPiece protocol,
-                   folly::StringPiece host,
-                   folly::StringPiece origin) noexcept;
 
 /**
  * Generate a padding frame, using an unused reserved frame type, which the

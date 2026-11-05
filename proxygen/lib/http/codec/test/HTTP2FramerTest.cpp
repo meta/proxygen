@@ -405,36 +405,6 @@ TEST_F(HTTP2FramerTest, Uint32MaxWindowUpdate) {
   EXPECT_EQ(uint31Max, amount);
 }
 
-TEST_F(HTTP2FramerTest, AltSvc) {
-  string protocol = "special-proto";
-  string host = "special-host";
-  string origin = "special-origin";
-  writeAltSvc(queue_, 2, 150, 8080, protocol, host, origin);
-
-  FrameHeader header;
-  uint32_t outMaxAge = 0;
-  uint32_t outPort = 0;
-  string outProtocol;
-  string outHost;
-  string outOrigin;
-  parse(&parseAltSvc,
-        header,
-        outMaxAge,
-        outPort,
-        outProtocol,
-        outHost,
-        outOrigin);
-
-  ASSERT_EQ(FrameType::ALTSVC, header.type);
-  ASSERT_EQ(2, header.stream);
-  ASSERT_EQ(0, header.flags);
-  EXPECT_EQ(150, outMaxAge);
-  EXPECT_EQ(8080, outPort);
-  EXPECT_EQ(protocol, outProtocol);
-  EXPECT_EQ(host, outHost);
-  EXPECT_EQ(origin, outOrigin);
-}
-
 TEST_F(HTTP2FramerTest, Settings) {
   const deque<SettingPair> settings = {{SettingsId::HEADER_TABLE_SIZE, 3},
                                        {SettingsId::MAX_CONCURRENT_STREAMS, 4}};
