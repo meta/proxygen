@@ -1105,11 +1105,11 @@ int HTTP1xLlCodec::onHeadersComplete() {
   if (ignoreBody) {
     parser_->skipBody();
   }
+  ingressState_.parseState = ParseState::kBody;
   if (isUpstream(transportDirection_) && connectionState_.connectRequest &&
       isUpgradeComplete()) {
-    parser_->markUpgrade();
+    return 2;
   }
-  ingressState_.parseState = ParseState::kBody;
   return pauseIfRequested();
 }
 
