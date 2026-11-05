@@ -2349,7 +2349,7 @@ TEST_P(HTTPDownstreamSessionTest, HandlerThrowsResetStream) {
   parseOutput();
 }
 
-// H2 only.  H1 cannot serialize body after trailers.  It's trailers or EOM
+// H2Q only.  H1 cannot serialize body after trailers.  It's trailers or EOM
 TEST_P(H2QDownstreamSessionTest, StateMachineError) {
   // Send request, send trailers (no EOM), send body
   auto req = getGetRequest();
@@ -2360,15 +2360,21 @@ TEST_P(H2QDownstreamSessionTest, StateMachineError) {
   // Use QPACK static table only here
   trailers.set("x-forwarded-for", "");
   clientCodec_->generateTrailers(writeBuf_, id, trailers);
-  if (isHQ()) {
-    EXPECT_TRUE(multiCodec_->getQPACKEncoderWriteBuf().empty());
-  } else {
+  if (!isHQ()) {
     // Our H2 codec always marks EOM on trailers.  Clear the flag.
     auto frameHeader = writeBuf_.split(9);
     frameHeader->writableData()[4] &= ~0x01;
     frameHeader->prependChain(writeBuf_.move());
     writeBuf_.append(std::move(frameHeader));
+    transport_->addReadEvent(id, writeBuf_.move(), false);
+
+    // H2 codec rejects trailers without END_STREAM before the handler runs
+    evb_.loop();
+    expectStreamAbort(id, ErrorCode::PROTOCOL_ERROR);
+    parseOutput();
+    return;
   }
+  EXPECT_TRUE(multiCodec_->getQPACKEncoderWriteBuf().empty());
   clientCodec_->generateBody(
       writeBuf_, id, makeBuf(10), HTTPCodec::NoPadding, false);
   transport_->addReadEvent(id, writeBuf_.move(), false);

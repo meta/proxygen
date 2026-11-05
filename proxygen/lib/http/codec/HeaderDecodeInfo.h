@@ -60,7 +60,8 @@ class HeaderDecodeInfo {
             bool isRequestTrailers,
             bool validate,
             bool strictValidation,
-            bool allowEmptyPath) {
+            bool allowEmptyPath,
+            bool missingEndStream = false) {
     CHECK(!msg);
     msg = std::make_unique<HTTPMessage>();
     isRequest_ = isRequestIn;
@@ -75,6 +76,7 @@ class HeaderDecodeInfo {
     decodeError = HPACK::DecodeError::NONE;
     strictValidation_ = strictValidation;
     allowEmptyPath_ = allowEmptyPath;
+    missingEndStream_ = missingEndStream;
     verifier.reset(msg.get());
   }
 
@@ -94,6 +96,14 @@ class HeaderDecodeInfo {
   HPACK::DecodeError decodeError{HPACK::DecodeError::NONE};
 
  private:
+  [[nodiscard]] bool isTrailers() const {
+    return isRequestTrailers_ || isResponseTrailers();
+  }
+
+  [[nodiscard]] bool isResponseTrailers() const {
+    return !isRequest_ && !hasStatus_;
+  }
+
   bool isRequest_{false};
   bool isRequestTrailers_{false};
   bool validate_{true};
@@ -103,6 +113,7 @@ class HeaderDecodeInfo {
   // Default to false for now to match existing behavior
   bool strictValidation_{false};
   bool allowEmptyPath_{false};
+  bool missingEndStream_{false};
   std::string firstPseudoHeader_;
 };
 

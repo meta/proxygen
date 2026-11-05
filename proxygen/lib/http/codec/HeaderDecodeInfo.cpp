@@ -193,11 +193,15 @@ void HeaderDecodeInfo::onHeadersComplete(HTTPHeaderSize decodedSize) {
     }
   }
 
-  bool isResponseTrailers = (!isRequest_ && !hasStatus_);
-  if ((isRequestTrailers_ || isResponseTrailers) && pseudoHeaderSeen_) {
-    error.set("pseudo-header-in-trailers",
-              folly::to<string>("name=", firstPseudoHeader_));
-    return;
+  if (isTrailers()) {
+    if (pseudoHeaderSeen_) {
+      error.set("pseudo-header-in-trailers",
+                folly::to<string>("name=", firstPseudoHeader_));
+      return;
+    } else if (error.empty() && missingEndStream_) {
+      error.set("trailers-without-eos");
+      return;
+    }
   }
 
   msg->setHTTPVersion(1, 1);

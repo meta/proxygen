@@ -340,6 +340,7 @@ class HTTP2Codec
   // CONTINUATION frame can follow either HEADERS or PUSH_PROMISE frames.
   // Keeps frame type of initiating frame of header block.
   http2::FrameType headerBlockFrameType_{http2::FrameType::DATA};
+  bool headerBlockEndStream_{false};
 };
 
 } // namespace proxygen

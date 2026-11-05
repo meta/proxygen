@@ -2715,6 +2715,86 @@ TEST_F(HTTP2CodecTest, TrailersReplyMissingContinuation) {
 #endif
 }
 
+TEST_F(HTTP2CodecTest, TrailersWithoutEndStream) {
+  HTTPMessage req = getGetRequest("/guacamole");
+  auto id = upstreamCodec_.createStream();
+  upstreamCodec_.generateHeader(output_, id, req);
+
+  HPACKCodec headerCodec(TransportDirection::UPSTREAM);
+  std::string name("x-trailer-1");
+  std::string value("pico-de-gallo");
+  std::vector<proxygen::compress::Header> trailers = {
+      Header::makeHeaderForTest(name, value)};
+  writeHeaders(output_,
+               headerCodec.encode(trailers),
+               1,
+               http2::kNoPadding,
+               false /* endStream */,
+               true /* endHeaders */);
+
+  parse();
+
+  EXPECT_EQ(callbacks_.headersComplete, 1);
+  EXPECT_EQ(callbacks_.trailers, 0);
+  EXPECT_EQ(callbacks_.messageComplete, 0);
+  EXPECT_EQ(callbacks_.streamErrors, 1);
+  EXPECT_EQ(callbacks_.lastParseError->getCodecStatusCode(),
+            ErrorCode::PROTOCOL_ERROR);
+  EXPECT_EQ(callbacks_.sessionErrors, 0);
+}
+
+TEST_F(HTTP2CodecTest, TrailersReplyWithoutEndStream) {
+  SetUpUpstreamTest();
+  upstreamCodec_.createStream();
+  HTTPMessage resp;
+  resp.setStatusCode(200);
+  downstreamCodec_.generateHeader(output_, 1, resp);
+
+  HPACKCodec headerCodec(TransportDirection::DOWNSTREAM);
+  std::string name("x-trailer-1");
+  std::string value("pico-de-gallo");
+  std::vector<proxygen::compress::Header> trailers = {
+      Header::makeHeaderForTest(name, value)};
+  writeHeaders(output_,
+               headerCodec.encode(trailers),
+               1,
+               http2::kNoPadding,
+               false /* endStream */,
+               true /* endHeaders */);
+
+  parseUpstream();
+
+  EXPECT_EQ(callbacks_.headersComplete, 1);
+  EXPECT_EQ(callbacks_.trailers, 0);
+  EXPECT_EQ(callbacks_.messageComplete, 0);
+  EXPECT_EQ(callbacks_.streamErrors, 1);
+  EXPECT_EQ(callbacks_.lastParseError->getCodecStatusCode(),
+            ErrorCode::PROTOCOL_ERROR);
+  EXPECT_EQ(callbacks_.sessionErrors, 0);
+}
+
+TEST_F(HTTP2CodecTest, TrailersReplyEmptyWithoutEndStream) {
+  SetUpUpstreamTest();
+  upstreamCodec_.createStream();
+  HTTPMessage resp;
+  resp.setStatusCode(200);
+  downstreamCodec_.generateHeader(output_, 1, resp);
+
+  writeHeaders(output_,
+               nullptr,
+               1,
+               http2::kNoPadding,
+               false /* endStream */,
+               true /* endHeaders */);
+
+  parseUpstream();
+
+  EXPECT_EQ(callbacks_.headersComplete, 1);
+  EXPECT_EQ(callbacks_.trailers, 0);
+  EXPECT_EQ(callbacks_.streamErrors, 1);
+  EXPECT_EQ(callbacks_.sessionErrors, 0);
+}
+
 TEST_F(HTTP2CodecTest, TrailersNotLatest) {
   HTTPMessage req = getGetRequest("/guacamole");
   req.getHeaders().add(HTTP_HEADER_USER_AGENT, "coolio");

@@ -444,6 +444,7 @@ ErrorCode HTTP2Codec::parseHeadersImpl(
   // if we're not parsing CONTINUATION, then it's start of new header block
   if (curHeader_.type != http2::FrameType::CONTINUATION) {
     headerBlockFrameType_ = curHeader_.type;
+    headerBlockEndStream_ = curHeader_.flags & http2::END_STREAM;
     if (promisedStream) {
       parsingReq_ = true;
     } else {
@@ -544,7 +545,8 @@ HTTP2Codec::parseHeadersDecodeFrames() {
                    parsingDownstreamTrailers_,
                    validateHeaders_,
                    strictValidation_,
-                   false);
+                   false,
+                   !headerBlockEndStream_);
 
   headerCodec_.decodeStreaming(
       headerCursor, curHeaderBlock_.chainLength(), this);
