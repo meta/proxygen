@@ -26,9 +26,9 @@ class TraceEventContext {
   TraceEventContext(uint32_t pID,
                     std::vector<TraceEventObserver*> observers,
                     bool allTraceEventNeeded = false,
-                    std::optional<int64_t> requestID = std::nullopt)
+                    std::optional<int64_t> reqID = std::nullopt)
       : parentID(pID),
-        requestID(requestID),
+        requestID(reqID),
         observers_(std::move(observers)),
         allTraceEventNeeded_(allTraceEventNeeded) {
   }
@@ -36,9 +36,9 @@ class TraceEventContext {
   explicit TraceEventContext(uint32_t pID = 0,
                              TraceEventObserver* observer = nullptr,
                              bool allTraceEventNeeded = false,
-                             std::optional<int64_t> requestID = std::nullopt)
+                             std::optional<int64_t> reqID = std::nullopt)
       : parentID(pID),
-        requestID(requestID),
+        requestID(reqID),
         allTraceEventNeeded_(allTraceEventNeeded) {
     if (observer) {
       observers_.push_back(observer);
