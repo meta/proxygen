@@ -18,9 +18,12 @@ namespace proxygen {
 using WTProtocolError = HTTPWebTransport::WTProtocolError;
 
 /*static*/ bool HTTPWebTransport::isConnectMessage(const HTTPMessage& msg) {
+  // webtransport-h3 is the draft-15+ token tied to SETTINGS_WT_ENABLED;
+  // webtransport is the draft-14 token browsers still send
   return msg.isRequest() && msg.getMethod() == proxygen::HTTPMethod::CONNECT &&
          msg.getUpgradeProtocol() &&
-         *msg.getUpgradeProtocol() == headers::kWebTransport;
+         (*msg.getUpgradeProtocol() == headers::kWebTransportH3 ||
+          *msg.getUpgradeProtocol() == headers::kWebTransport);
 }
 
 /*static*/ HTTPMessage HTTPWebTransport::makeConnectRequest(
