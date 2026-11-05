@@ -161,9 +161,10 @@ size_t HTTP1xLlCodec::onIngress(const folly::IOBuf& buf) {
     folly::IOBuf currentReadBuf;
     auto bufSize = cursor.peekBytes().size();
     cursor.cloneAtMost(currentReadBuf, bufSize);
+    const auto prevParseState = ingressState_.parseState;
     size_t bytesParsed = onIngressImpl(currentReadBuf);
 
-    if (bytesParsed == 0) {
+    if (bytesParsed == 0 && ingressState_.parseState == prevParseState) {
       // If the codec didn't make any progress with current input, we
       // wait for more data until this is called again
       break;
@@ -207,7 +208,9 @@ size_t HTTP1xLlCodec::onIngressImpl(const folly::IOBuf& buf) {
         (parser_->isPaused() || data[len - 1] == '\n')) {
       endHttp09RequestLine();
     }
-    flushPendingIngress();
+    if (!isUpgradePending()) {
+      flushPendingIngress();
+    }
     resumeDeclinedUpgrade();
     if (isParserError()) {
       onParserError();
@@ -230,6 +233,12 @@ void HTTP1xLlCodec::onIngressEOF() {
   }
   if (parser_->isActive()) {
     ingressState_.awaitingEOF = true;
+    return;
+  }
+  flushPendingIngress();
+  resumeDeclinedUpgrade();
+  if (isParserError()) {
+    onParserError();
     return;
   }
   if (isParseStateUpgraded()) {

@@ -227,6 +227,97 @@ TEST(HTTP1xLlCodecTest, TestPauseInBodyAtEndOfInputCompletesMessage) {
   EXPECT_TRUE(codec.isParserPaused());
 }
 
+TEST(HTTP1xLlCodecTest, TestPausedUpgradeRequestCompletesOnEOF) {
+  HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+  MockHTTPCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  const std::string req =
+      "GET / HTTP/1.1\r\nHost: a\r\nConnection: Upgrade\r\nUpgrade: "
+      "h2c\r\n\r\n";
+
+  EXPECT_CALL(callbacks, onHeadersComplete(1, _))
+      .WillOnce(InvokeWithoutArgs([&] { codec.setParserPaused(true); }));
+  EXPECT_CALL(callbacks, onMessageComplete(_, _)).Times(0);
+  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer(req)), req.size());
+  Mock::VerifyAndClearExpectations(&callbacks);
+
+  EXPECT_CALL(callbacks, onMessageComplete(1, false));
+  EXPECT_CALL(callbacks, onError(_, _, _)).Times(0);
+  codec.setParserPaused(false);
+  codec.onIngressEOF();
+}
+
+TEST(HTTP1xLlCodecTest, TestPausedUpgradeRequestCompletesOnEOFWhilePaused) {
+  HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+  MockHTTPCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  const std::string req =
+      "GET / HTTP/1.1\r\nHost: a\r\nConnection: Upgrade\r\nUpgrade: "
+      "h2c\r\n\r\n";
+
+  EXPECT_CALL(callbacks, onHeadersComplete(1, _))
+      .WillOnce(InvokeWithoutArgs([&] { codec.setParserPaused(true); }));
+  EXPECT_CALL(callbacks, onMessageComplete(_, _)).Times(0);
+  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer(req)), req.size());
+  Mock::VerifyAndClearExpectations(&callbacks);
+
+  EXPECT_CALL(callbacks, onMessageComplete(1, false));
+  EXPECT_CALL(callbacks, onError(_, _, _)).Times(0);
+  codec.onIngressEOF();
+  EXPECT_TRUE(codec.isParserPaused());
+}
+
+TEST(HTTP1xLlCodecTest, TestPausedUpgradeRequestCompletesOnNextIngress) {
+  HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+  MockHTTPCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  const std::string req =
+      "GET / HTTP/1.1\r\nHost: a\r\nConnection: Upgrade\r\nUpgrade: "
+      "h2c\r\n\r\n";
+  const std::string get = "GET /2 HTTP/1.1\r\nHost: a\r\n\r\n";
+
+  EXPECT_CALL(callbacks, onHeadersComplete(1, _))
+      .WillOnce(InvokeWithoutArgs([&] { codec.setParserPaused(true); }));
+  EXPECT_CALL(callbacks, onMessageComplete(_, _)).Times(0);
+  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer(req)), req.size());
+  Mock::VerifyAndClearExpectations(&callbacks);
+
+  EXPECT_CALL(callbacks, onMessageComplete(1, false));
+  EXPECT_CALL(callbacks, onHeadersComplete(2, _));
+  EXPECT_CALL(callbacks, onMessageComplete(2, false));
+  codec.setParserPaused(false);
+  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer(get)), get.size());
+}
+
+// HTTPCoroSession pauses on a WebSocket request and resumes just before writing
+// the response
+TEST(HTTP1xLlCodecTest, TestPausedWebsocketRequestCompletesWithFirstFrame) {
+  HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+  MockHTTPCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  const std::string req =
+      "GET / HTTP/1.1\r\nHost: a\r\nConnection: Upgrade\r\nUpgrade: "
+      "websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+
+  EXPECT_CALL(callbacks, onHeadersComplete(1, _))
+      .WillOnce(InvokeWithoutArgs([&] { codec.setParserPaused(true); }));
+  EXPECT_CALL(callbacks, onMessageComplete(_, _)).Times(0);
+  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer(req)), req.size());
+
+  codec.setParserPaused(false);
+  HTTPMessage resp;
+  resp.setHTTPVersion(1, 1);
+  resp.setStatusCode(101);
+  resp.setEgressWebsocketUpgrade();
+  folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
+  codec.generateHeader(writeBuf, 1, resp);
+  Mock::VerifyAndClearExpectations(&callbacks);
+
+  EXPECT_CALL(callbacks, onMessageComplete(1, true));
+  EXPECT_CALL(callbacks, onBody(1, _, _));
+  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer("frame")), 5);
+}
+
 TEST(HTTP1xLlCodecTest, TestPauseInPartialBodyAtEndOfInput) {
   HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
   MockHTTPCodecCallback callbacks;
