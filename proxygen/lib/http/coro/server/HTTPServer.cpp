@@ -15,19 +15,14 @@
 #include <quic/mvfst-config.h>
 #include <quic/server/QuicSharedUDPSocketFactory.h>
 
-#include <cstdint>
 #include <folly/fibers/BatchSemaphore.h>
 #include <folly/io/async/EventBaseManager.h>
 #include <folly/logging/xlog.h>
 #include <folly/system/HardwareConcurrency.h>
-#include <limits>
 
 namespace proxygen::coro {
 
 namespace {
-
-// TODO(T295792877)
-constexpr size_t kMaxQuicWorkers = std::numeric_limits<uint8_t>::max() + 1;
 
 class QuicAcceptorTransportFactory : public quic::QuicServerTransportFactory {
  public:
@@ -133,10 +128,12 @@ void HTTPServer::start(
   if (config_.numIOThreads == 0) {
     config_.numIOThreads = folly::available_concurrency();
   }
-  if (config_.quicConfig && config_.numIOThreads > kMaxQuicWorkers) {
-    XLOG(WARNING) << "QuicServer supports at most " << kMaxQuicWorkers
+  if (config_.quicConfig &&
+      config_.numIOThreads > quic::QuicServer::kMaxWorkers) {
+    XLOG(WARNING) << "QuicServer supports at most "
+                  << quic::QuicServer::kMaxWorkers
                   << " workers; capping requested " << config_.numIOThreads;
-    config_.numIOThreads = kMaxQuicWorkers;
+    config_.numIOThreads = quic::QuicServer::kMaxWorkers;
   }
   folly::IOThreadPoolExecutor::Options options;
   options.setWaitForAll(true);
