@@ -12,6 +12,8 @@
 
 namespace facebook::detail {
 
+constexpr char kNoInput = '\0';
+
 LlhttpParser::LlhttpParser(llhttp_type_t type,
                            const llhttp_settings_t* settings,
                            void* callbackContext,
@@ -44,14 +46,22 @@ size_t LlhttpParser::execute(const char* data, size_t len) {
     return 0;
   }
 
+  pendingIngress_ = false;
   active_ = true;
   const auto executeError = llhttp_execute(&parser_, data, len);
   active_ = false;
+  pendingIngress_ = executeError == HPE_PAUSED && len > 0 &&
+                    llhttp_get_error_pos(&parser_) == data + len;
   if (executeError == HPE_OK) {
     return len;
   }
 
   return static_cast<size_t>(llhttp_get_error_pos(&parser_) - data);
+}
+
+void LlhttpParser::runPendingIngress() {
+  pendingIngress_ = false;
+  execute(&kNoInput, 0);
 }
 
 void LlhttpParser::finish() {

@@ -131,6 +131,21 @@ bool HTTP1xLlCodec::isParserPaused() const {
   return ingressState_.pauseRequested;
 }
 
+bool HTTP1xLlCodec::hasPendingIngress() const {
+  return parser_->hasPendingIngress() && !isParseStateUpgraded();
+}
+
+void HTTP1xLlCodec::flushPendingIngress() {
+  if (parser_->isActive() || !hasPendingIngress()) {
+    return;
+  }
+  parser_->resume();
+  parser_->runPendingIngress();
+  if (isParserPaused()) {
+    parser_->pause();
+  }
+}
+
 void HTTP1xLlCodec::resumeDeclinedUpgrade() {
   if (parser_->error() == HPE_PAUSED_UPGRADE && !isParseStateUpgraded() &&
       !isParserPaused()) {
@@ -192,6 +207,7 @@ size_t HTTP1xLlCodec::onIngressImpl(const folly::IOBuf& buf) {
         (parser_->isPaused() || data[len - 1] == '\n')) {
       endHttp09RequestLine();
     }
+    flushPendingIngress();
     resumeDeclinedUpgrade();
     if (isParserError()) {
       onParserError();
@@ -1089,6 +1105,9 @@ int HTTP1xLlCodec::onHeadersComplete() {
 }
 
 int HTTP1xLlCodec::onBody(const char* buf, size_t len) {
+  if (len == 0) {
+    return 0;
+  }
   DCHECK_EQ(ingressState_.parseState, ParseState::kBody);
   CHECK_NOTNULL(ingressState_.buf);
 

@@ -56,6 +56,8 @@ class LlhttpParser {
   LlhttpParser& operator=(LlhttpParser&&) = delete;
 
   size_t execute(const char* data, size_t len);
+  // Runs the work a pause left that needs no more input
+  void runPendingIngress();
   void finish();
   void setError(llhttp_errno_t error, const char* reason);
 
@@ -85,6 +87,10 @@ class LlhttpParser {
   }
   [[nodiscard]] bool isActive() const {
     return active_;
+  }
+  // llhttp paused after consuming all input, with work left that needs no more
+  [[nodiscard]] bool hasPendingIngress() const {
+    return pendingIngress_;
   }
 
   [[nodiscard]] uint8_t httpMajor() const {
@@ -117,6 +123,7 @@ class LlhttpParser {
  private:
   llhttp_t parser_{};
   bool active_{false};
+  bool pendingIngress_{false};
 };
 
 const char* llhttpErrToContext(llhttp_errno_t err);

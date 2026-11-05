@@ -212,6 +212,41 @@ TEST(HTTP1xLlCodecTest, EOFAfterUpgradeRequestIsNotAnError) {
   EXPECT_EQ(callbacks.errors, 0);
 }
 
+TEST(HTTP1xLlCodecTest, TestPauseInBodyAtEndOfInputCompletesMessage) {
+  HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+  MockHTTPCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  const std::string post =
+      "POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 2\r\n\r\nhi";
+
+  EXPECT_CALL(callbacks, onBody(1, _, _)).WillOnce(InvokeWithoutArgs([&] {
+    codec.setParserPaused(true);
+  }));
+  EXPECT_CALL(callbacks, onMessageComplete(1, false));
+  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer(post)), post.size());
+  EXPECT_TRUE(codec.isParserPaused());
+}
+
+TEST(HTTP1xLlCodecTest, TestPauseInPartialBodyAtEndOfInput) {
+  HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+  MockHTTPCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  const std::string head =
+      "POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 4\r\n\r\nhi";
+
+  EXPECT_CALL(callbacks, onBody(1, _, _)).WillOnce(InvokeWithoutArgs([&] {
+    codec.setParserPaused(true);
+  }));
+  EXPECT_CALL(callbacks, onMessageComplete(_, _)).Times(0);
+  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer(head)), head.size());
+  Mock::VerifyAndClearExpectations(&callbacks);
+
+  EXPECT_CALL(callbacks, onBody(1, _, _));
+  EXPECT_CALL(callbacks, onMessageComplete(1, false));
+  codec.setParserPaused(false);
+  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer("!!")), 2);
+}
+
 TEST(HTTP1xLlCodecTest, Test09Req) {
   HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
   HTTP1xLlCodecCallback callbacks;
@@ -259,7 +294,7 @@ TEST(HTTP1xLlCodecTest, Test09ReqFollowedByMoreDataRejected) {
   EXPECT_EQ(callbacks.msg_->getHeaders().size(), 0);
 }
 
-TEST(HTTP1xLlCodecTest, Test09ReqPauseInHeadersDefersMessageComplete) {
+TEST(HTTP1xLlCodecTest, Test09ReqPauseInHeadersCompletesMessage) {
   HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
   MockHTTPCodecCallback callbacks;
   codec.setCallback(&callbacks);
@@ -269,11 +304,11 @@ TEST(HTTP1xLlCodecTest, Test09ReqPauseInHeadersDefersMessageComplete) {
 
   EXPECT_CALL(callbacks, onHeadersComplete(1, _))
       .WillOnce(InvokeWithoutArgs([&] { codec.setParserPaused(true); }));
-  EXPECT_CALL(callbacks, onMessageComplete(_, _)).Times(0);
+  EXPECT_CALL(callbacks, onMessageComplete(1, false));
   EXPECT_EQ(codec.onIngress(*buffer), req.size());
   Mock::VerifyAndClearExpectations(&callbacks);
 
-  EXPECT_CALL(callbacks, onMessageComplete(1, false));
+  EXPECT_CALL(callbacks, onMessageComplete(_, _)).Times(0);
   EXPECT_CALL(callbacks, onError(_, _, _)).Times(0);
   codec.setParserPaused(false);
   buffer->trimStart(req.size());

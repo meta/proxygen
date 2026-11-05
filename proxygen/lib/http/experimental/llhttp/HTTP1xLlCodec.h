@@ -214,6 +214,8 @@ class HTTP1xLlCodec : public HTTPCodec {
   ConnectionState connectionState_;
 
   // Helper Methods
+  [[nodiscard]] bool hasPendingIngress() const;
+  void flushPendingIngress();
   void resumeDeclinedUpgrade();
   [[nodiscard]] bool isParsingHeaders() const {
     return ingressState_.parseState == ParseState::kHeaders;

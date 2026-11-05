@@ -31,7 +31,11 @@ struct CallbackState {
   }
 
   static int onMessageComplete(llhttp_t* parser) {
-    from(parser).messageComplete++;
+    auto& state = from(parser);
+    state.messageComplete++;
+    if (state.parser) {
+      state.pendingDuringMessageComplete = state.parser->hasPendingIngress();
+    }
     return HPE_OK;
   }
 
@@ -48,6 +52,8 @@ struct CallbackState {
   }
 
   bool pauseAtHeaders{false};
+  LlhttpParser* parser{nullptr};
+  bool pendingDuringMessageComplete{false};
   size_t headersComplete{0};
   size_t messageComplete{0};
   std::string url;
@@ -84,6 +90,51 @@ TEST(LlhttpParserTest, ReturnsBytesConsumedBeforePause) {
   parser.resume();
   EXPECT_EQ(parser.execute(request.data() + headers.size(), 4), 4);
   EXPECT_EQ(callbacks.messageComplete, 1);
+}
+
+TEST(LlhttpParserTest, PauseAtEndOfInputLeavesPendingIngress) {
+  CallbackState callbacks;
+  callbacks.pauseAtHeaders = true;
+  LlhttpParser parser{HTTP_REQUEST, CallbackState::settings(), &callbacks};
+  const std::string request = "GET /foo HTTP/1.1\r\nHost: h\r\n\r\n";
+
+  EXPECT_EQ(parser.execute(request.data(), request.size()), request.size());
+  EXPECT_TRUE(parser.hasPendingIngress());
+  EXPECT_EQ(callbacks.messageComplete, 0);
+
+  callbacks.pauseAtHeaders = false;
+  parser.resume();
+  parser.runPendingIngress();
+  EXPECT_FALSE(parser.hasPendingIngress());
+  EXPECT_EQ(callbacks.messageComplete, 1);
+}
+
+TEST(LlhttpParserTest, PendingIngressIsClearWhileExecuting) {
+  CallbackState callbacks;
+  callbacks.pauseAtHeaders = true;
+  LlhttpParser parser{HTTP_REQUEST, CallbackState::settings(), &callbacks};
+  callbacks.parser = &parser;
+  const std::string request = "GET /foo HTTP/1.1\r\nHost: h\r\n\r\n";
+
+  EXPECT_EQ(parser.execute(request.data(), request.size()), request.size());
+  ASSERT_TRUE(parser.hasPendingIngress());
+
+  callbacks.pauseAtHeaders = false;
+  parser.resume();
+  parser.execute(request.data(), request.size());
+  EXPECT_EQ(callbacks.messageComplete, 2);
+  EXPECT_FALSE(callbacks.pendingDuringMessageComplete);
+}
+
+TEST(LlhttpParserTest, PauseBeforeEndOfInputLeavesNoPendingIngress) {
+  CallbackState callbacks;
+  callbacks.pauseAtHeaders = true;
+  LlhttpParser parser{HTTP_REQUEST, CallbackState::settings(), &callbacks};
+  const std::string headers = "POST /foo HTTP/1.1\r\nContent-Length: 4\r\n\r\n";
+  const std::string request = headers + "body";
+
+  EXPECT_EQ(parser.execute(request.data(), request.size()), headers.size());
+  EXPECT_FALSE(parser.hasPendingIngress());
 }
 
 TEST(LlhttpParserTest, ReturnsBytesConsumedBeforeParseError) {
