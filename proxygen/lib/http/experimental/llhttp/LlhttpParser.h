@@ -67,6 +67,9 @@ class LlhttpParser {
   [[nodiscard]] bool isUpgrade() const {
     return parser_.upgrade != 0;
   }
+  [[nodiscard]] bool shouldKeepAlive() const {
+    return llhttp_should_keep_alive(&parser_) != 0;
+  }
   [[nodiscard]] llhttp_errno_t error() const {
     return static_cast<llhttp_errno_t>(parser_.error);
   }

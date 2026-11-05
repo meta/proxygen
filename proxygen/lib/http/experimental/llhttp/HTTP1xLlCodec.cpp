@@ -1071,7 +1071,19 @@ int HTTP1xLlCodec::onHeadersComplete() {
     }
   }
 
-  bool msgKeepalive = ingressState_.msg->computeKeepalive();
+  bool ignoreBody = false;
+  if (isUpstream(transportDirection_)) {
+    ingressState_.is1xxResponse = ingressState_.msg->is1xxResponse();
+    // If CONNECT or HEAD req we don't expect a response body
+    ignoreBody =
+        connectionState_.connectRequest || connectionState_.headRequest ||
+        RFC2616::responseBodyMustBeEmpty(ingressState_.msg->getStatusCode());
+  }
+  if (ignoreBody) {
+    parser_->skipBody();
+  }
+
+  const bool msgKeepalive = parser_->shouldKeepAlive();
   if (!msgKeepalive) {
     connectionState_.keepAlive = false;
   }
@@ -1085,15 +1097,6 @@ int HTTP1xLlCodec::onHeadersComplete() {
             : KeepaliveRequested::DISABLED;
   }
 
-  bool ignoreBody = false;
-  if (isUpstream(transportDirection_)) {
-    ingressState_.is1xxResponse = ingressState_.msg->is1xxResponse();
-    // If CONNECT or HEAD req we don't expect a response body
-    ignoreBody =
-        connectionState_.connectRequest || connectionState_.headRequest ||
-        RFC2616::responseBodyMustBeEmpty(ingressState_.msg->getStatusCode());
-  }
-
   if (userAgent_.empty()) {
     userAgent_ = ingressState_.msg->getHeaders().getSingleOrEmpty(
         HTTP_HEADER_USER_AGENT);
@@ -1102,9 +1105,6 @@ int HTTP1xLlCodec::onHeadersComplete() {
   callback_->onHeadersComplete(ingressState_.txnID,
                                std::move(ingressState_.msg));
 
-  if (ignoreBody) {
-    parser_->skipBody();
-  }
   ingressState_.parseState = ParseState::kBody;
   if (isUpstream(transportDirection_) && connectionState_.connectRequest &&
       isUpgradeComplete()) {

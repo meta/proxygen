@@ -2106,6 +2106,35 @@ TEST(HTTP1xLlCodecTest, UpstreamConnectTunnelBytes) {
   EXPECT_EQ(callbacks.bodyLen, 11);
 }
 
+TEST(HTTP1xLlCodecTest, UpstreamResponseReadUntilEOFIsNotReusable) {
+  HTTP1xLlCodec codec(TransportDirection::UPSTREAM);
+  HTTP1xLlCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  HTTPMessage req = getGetRequest();
+  folly::IOBufQueue writeBuf(folly::IOBufQueue::cacheChainLength());
+  codec.generateHeader(writeBuf, codec.createStream(), req, true);
+
+  auto resp = folly::IOBuf::copyBuffer("HTTP/1.1 200 OK\r\n\r\nbody");
+  codec.onIngress(*resp);
+  EXPECT_EQ(callbacks.headersComplete, 1);
+  EXPECT_FALSE(codec.isReusable());
+}
+
+TEST(HTTP1xLlCodecTest, UpstreamHeadResponseWithoutLengthIsReusable) {
+  HTTP1xLlCodec codec(TransportDirection::UPSTREAM);
+  HTTP1xLlCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  HTTPMessage req = getGetRequest();
+  req.setMethod(HTTPMethod::HEAD);
+  folly::IOBufQueue writeBuf(folly::IOBufQueue::cacheChainLength());
+  codec.generateHeader(writeBuf, codec.createStream(), req, true);
+
+  auto resp = folly::IOBuf::copyBuffer("HTTP/1.1 200 OK\r\n\r\n");
+  codec.onIngress(*resp);
+  EXPECT_EQ(callbacks.messageComplete, 1);
+  EXPECT_TRUE(codec.isReusable());
+}
+
 TEST(HTTP1xLlCodecTest, UpgradeWithoutConnectionUpgradeIsIgnored) {
   HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
   HTTP1xLlCodecCallback callbacks;
