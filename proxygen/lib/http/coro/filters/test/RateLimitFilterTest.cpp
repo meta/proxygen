@@ -49,7 +49,7 @@ class RateLimitFilterTest : public testing::Test {
     verifyReadSize(verifyAmount, eom);
     auto currentTime = std::chrono::steady_clock::now();
     folly::ScopedEventBaseThread sEvb;
-    auto task = co_withExecutor(sEvb.getEventBase(),
+    auto task = co_withExecutor(sEvb.getEventBaseKeepAlive(),
                                 testFilter_->readBodyEvent(readAmount));
     folly::coro::blockingWait(std::move(task));
     return std::chrono::duration_cast<std::chrono::seconds>(
@@ -197,8 +197,8 @@ TEST_F(RateLimitFilterTest, ReadEOM) {
       .WillOnce(folly::coro::gmock_helpers::CoReturnByMove(
           HTTPBodyEvent(nullptr, true)));
   folly::ScopedEventBaseThread sEvb;
-  auto task = co_awaitTry(
-      co_withExecutor(sEvb.getEventBase(), testFilter_->readBodyEvent(2000)));
+  auto task = co_awaitTry(co_withExecutor(sEvb.getEventBaseKeepAlive(),
+                                          testFilter_->readBodyEvent(2000)));
   auto body = folly::coro::blockingWait(std::move(task));
   EXPECT_TRUE(body->eom);
   // EOM body takes care of deleting filter. No need to error it out.

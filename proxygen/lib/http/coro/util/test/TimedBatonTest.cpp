@@ -155,8 +155,8 @@ CO_TEST_F_X(TimedBatonTest, TimedBatonRequestCancellationOutsideEvb) {
   folly::EventBase* otherEvb = otherScopedEvb.getEventBase();
   folly::CancellationSource cancellationSource;
   auto cancellationToken = cancellationSource.getToken();
-  via(otherEvb).then(
-      [otherEvb, cs = std::move(cancellationSource)](auto&&) mutable {
+  via(otherScopedEvb.getEventBaseKeepAlive())
+      .then([otherEvb, cs = std::move(cancellationSource)](auto&&) mutable {
         // request cancellation after small 100ms delay to ensure
         // TimedBaton::wait is invoked first
         otherEvb->runAfterDelay(
