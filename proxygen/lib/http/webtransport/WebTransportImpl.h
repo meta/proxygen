@@ -334,7 +334,11 @@ class WebTransportImpl
 
     folly::Expected<folly::Unit, WebTransport::ErrorCode> stopSending(
         uint32_t error) override {
-      return impl_.stopReadingWebTransportIngress(id_, error);
+      auto res = impl_.stopReadingWebTransportIngress(id_, error);
+      // The read callback is gone, so the solicited RESET_STREAM cannot fail
+      // a pending read. May destroy this handle.
+      deliverReadError(WebTransport::Exception(error, "sent stop_sending"));
+      return res;
     }
 
     FCState dataAvailable(std::unique_ptr<folly::IOBuf> data, bool eof);
