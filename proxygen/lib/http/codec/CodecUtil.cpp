@@ -175,7 +175,7 @@ void CodecUtil::logIfFieldSectionExceedsPeerMax(
 
 std::unique_ptr<folly::IOBuf> CodecUtil::zeroedBuffer(uint16_t size) {
   // Technically this is 64KiB - 1 byte, but close enough
-  static_assert(std::numeric_limits<decltype(size)>::max() <= 65535);
+  static_assert(sizeof(size) <= sizeof(uint16_t));
   static const std::vector<uint8_t> k64KiBVec(
       // NOLINTNEXTLINE(facebook-hte-ContextDependentStaticInit)
       std::numeric_limits<decltype(size)>::max());

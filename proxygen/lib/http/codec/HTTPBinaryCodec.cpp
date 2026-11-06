@@ -194,8 +194,7 @@ ParseResult HTTPBinaryCodec::parseRequestControlData(folly::io::Cursor& cursor,
                                    CodecUtil::stripQueryAndFragment(path)));
   }
   parsed += pathRes.bytesParsed_;
-  remaining -= pathRes.bytesParsed_;
-  CHECK(remaining >= 0);
+  CHECK_LE(pathRes.bytesParsed_, remaining);
 
   return ParseResult(parsed);
 }

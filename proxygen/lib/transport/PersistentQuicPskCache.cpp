@@ -71,7 +71,7 @@ quic::Optional<quic::QuicCachedPsk> PersistentQuicPskCache::getPsk(
     } else {
       cache_.put(identity, *cachedPsk);
     }
-    return std::move(quicCachedPsk);
+    return quicCachedPsk;
   } catch (const std::exception& ex) {
     LOG(ERROR) << "Error deserializing PSK: " << ex.what();
     cache_.remove(identity);
