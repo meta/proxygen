@@ -11,6 +11,7 @@
 #include <proxygen/lib/http/codec/CodecProtocol.h>
 #include <proxygen/lib/http/codec/HTTP1xCodec.h>
 #include <proxygen/lib/http/codec/HTTP2Codec.h>
+#include <proxygen/lib/http/experimental/llhttp/HTTP1xLlCodec.h>
 
 namespace proxygen {
 
@@ -49,6 +50,10 @@ std::unique_ptr<HTTPCodec> DefaultHTTPCodecFactory::getCodec(
         return nullptr;
       }
 
+      if (config.h1.useLlhttp) {
+        return std::make_unique<HTTP1xLlCodec>(direction,
+                                               config.h1.forceHTTP1xCodecTo1_1);
+      }
       return std::make_unique<HTTP1xCodec>(
           direction, config.h1.forceHTTP1xCodecTo1_1, config.strictValidation);
     }

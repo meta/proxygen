@@ -23,6 +23,7 @@ class HTTPCodecFactory {
  public:
   struct HTTP1xCodecConfig {
     bool forceHTTP1xCodecTo1_1{false};
+    bool useLlhttp{false};
   };
 
   struct HTTP2CodecConfig {

@@ -1,0 +1,181 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+set(PROXYGEN_LLHTTP_SYMBOLS
+  llhttp__after_headers_complete
+  llhttp__after_message_complete
+  llhttp__before_headers_complete
+  llhttp__debug
+  llhttp_errno_name
+  llhttp_execute
+  llhttp_finish
+  llhttp_get_errno
+  llhttp_get_error_pos
+  llhttp_get_error_reason
+  llhttp_get_http_major
+  llhttp_get_http_minor
+  llhttp_get_method
+  llhttp_get_status_code
+  llhttp_get_type
+  llhttp_get_upgrade
+  llhttp_init
+  llhttp__internal__c_and_flags
+  llhttp__internal__c_is_equal_content_length
+  llhttp__internal__c_is_equal_method
+  llhttp__internal__c_is_equal_upgrade
+  llhttp__internal__c_load_header_state
+  llhttp__internal__c_load_http_major
+  llhttp__internal__c_load_http_minor
+  llhttp__internal__c_load_initial_message_completed
+  llhttp__internal__c_load_method
+  llhttp__internal__c_load_type
+  llhttp__internal__c_mul_add_content_length
+  llhttp__internal__c_mul_add_content_length_1
+  llhttp__internal__c_mul_add_status_code
+  llhttp__internal__c_or_flags
+  llhttp__internal__c_or_flags_1
+  llhttp__internal__c_or_flags_17
+  llhttp__internal__c_or_flags_18
+  llhttp__internal__c_or_flags_20
+  llhttp__internal__c_or_flags_5
+  llhttp__internal__c_or_flags_6
+  llhttp__internal__c_or_flags_7
+  llhttp__internal__c_or_flags_8
+  llhttp__internal__c_store_header_state
+  llhttp__internal__c_store_http_major
+  llhttp__internal__c_store_http_minor
+  llhttp__internal__c_store_method
+  llhttp__internal__c_test_flags
+  llhttp__internal__c_test_flags_2
+  llhttp__internal__c_test_flags_3
+  llhttp__internal__c_test_flags_4
+  llhttp__internal__c_test_lenient_flags
+  llhttp__internal__c_test_lenient_flags_1
+  llhttp__internal__c_test_lenient_flags_2
+  llhttp__internal__c_test_lenient_flags_20
+  llhttp__internal__c_test_lenient_flags_21
+  llhttp__internal__c_test_lenient_flags_23
+  llhttp__internal__c_test_lenient_flags_25
+  llhttp__internal__c_test_lenient_flags_3
+  llhttp__internal__c_test_lenient_flags_4
+  llhttp__internal__c_test_lenient_flags_7
+  llhttp__internal__c_test_lenient_flags_8
+  llhttp__internal__c_update_content_length
+  llhttp__internal__c_update_finish
+  llhttp__internal__c_update_finish_1
+  llhttp__internal__c_update_finish_3
+  llhttp__internal__c_update_header_state
+  llhttp__internal__c_update_header_state_1
+  llhttp__internal__c_update_header_state_3
+  llhttp__internal__c_update_header_state_6
+  llhttp__internal__c_update_header_state_7
+  llhttp__internal__c_update_header_state_8
+  llhttp__internal__c_update_http_major
+  llhttp__internal__c_update_http_minor
+  llhttp__internal__c_update_initial_message_completed
+  llhttp__internal__c_update_status_code
+  llhttp__internal__c_update_type
+  llhttp__internal__c_update_type_1
+  llhttp__internal__c_update_upgrade
+  llhttp__internal_execute
+  llhttp__internal_init
+  llhttp_message_needs_eof
+  llhttp_method_name
+  llhttp__on_body
+  llhttp__on_chunk_complete
+  llhttp__on_chunk_extension_name
+  llhttp__on_chunk_extension_name_complete
+  llhttp__on_chunk_extension_value
+  llhttp__on_chunk_extension_value_complete
+  llhttp__on_chunk_header
+  llhttp__on_header_field
+  llhttp__on_header_field_complete
+  llhttp__on_headers_complete
+  llhttp__on_header_value
+  llhttp__on_header_value_complete
+  llhttp__on_message_begin
+  llhttp__on_message_complete
+  llhttp__on_method
+  llhttp__on_method_complete
+  llhttp__on_protocol
+  llhttp__on_protocol_complete
+  llhttp__on_reset
+  llhttp__on_status
+  llhttp__on_status_complete
+  llhttp__on_url
+  llhttp__on_url_complete
+  llhttp__on_version
+  llhttp__on_version_complete
+  llhttp_pause
+  llhttp_reset
+  llhttp_resume
+  llhttp_resume_after_upgrade
+  llhttp_set_error_reason
+  llhttp_set_lenient_chunked_length
+  llhttp_set_lenient_data_after_close
+  llhttp_set_lenient_headers
+  llhttp_set_lenient_header_value_relaxed
+  llhttp_set_lenient_keep_alive
+  llhttp_set_lenient_optional_cr_before_lf
+  llhttp_set_lenient_optional_crlf_after_chunk
+  llhttp_set_lenient_optional_lf_after_cr
+  llhttp_set_lenient_spaces_after_chunk_size
+  llhttp_set_lenient_transfer_encoding
+  llhttp_set_lenient_version
+  llhttp_settings_init
+  llhttp_should_keep_alive
+  llhttp_status_name
+)
+
+set(PROXYGEN_LLHTTP_SYMBOL_PREFIX_DEFINITIONS)
+foreach(symbol IN LISTS PROXYGEN_LLHTTP_SYMBOLS)
+  list(APPEND PROXYGEN_LLHTTP_SYMBOL_PREFIX_DEFINITIONS "${symbol}=proxygen_${symbol}")
+endforeach()
+
+proxygen_add_library(proxygen_http_experimental_llhttp_definitions)
+target_compile_definitions(proxygen_http_experimental_llhttp_definitions
+  INTERFACE ${PROXYGEN_LLHTTP_SYMBOL_PREFIX_DEFINITIONS}
+)
+
+proxygen_add_library(proxygen_http_experimental_llhttp
+  SRCS
+    api.c
+    http.c
+    llhttp.c
+    LlhttpParser.cpp
+)
+target_link_libraries(proxygen_http_experimental_llhttp_obj
+  PUBLIC proxygen_http_experimental_llhttp_definitions
+)
+target_link_libraries(proxygen_http_experimental_llhttp
+  INTERFACE proxygen_http_experimental_llhttp_definitions
+)
+if(NOT MSVC)
+  target_compile_options(proxygen_http_experimental_llhttp_obj PRIVATE
+    -Wno-implicit-fallthrough
+    -Wno-switch-enum
+    -Wno-switch-default
+    $<$<COMPILE_LANGUAGE:C>:-Wno-missing-prototypes>
+  )
+endif()
+
+proxygen_add_library(proxygen_http_experimental_llhttp_http1x_ll_codec
+  SRCS
+    HTTP1xLlCodec.cpp
+  DEPS
+    proxygen_http_http_headers
+    proxygen_http_codec_util
+    Folly::folly_base64
+    Folly::folly_conv
+    Folly::folly_random
+    Folly::folly_string
+    Folly::folly_io_iobuf
+    Folly::folly_ssl_openssl_hash
+  EXPORTED_DEPS
+    proxygen_http_experimental_llhttp
+    proxygen_http_codec_codec_common
+    proxygen_http_codec_direction
+)

@@ -80,6 +80,7 @@ proxygen_add_library(proxygen_http_codec_http1x_codec
     Folly::folly_io_iobuf
     Folly::folly_random
     Folly::folly_ssl_openssl_hash
+    Folly::folly_string
   EXPORTED_DEPS
     proxygen_external_http_parser
     proxygen_http_codec_codec_common
@@ -142,6 +143,7 @@ proxygen_add_library(proxygen_http_codec_codec_factory
   DEPS
     proxygen_http_codec_http1x_codec
     proxygen_http_codec_http2_codec
+    proxygen_http_experimental_llhttp_http1x_ll_codec
   EXPORTED_DEPS
     proxygen_http_codec_codec_common
     proxygen_http_codec_direction

@@ -140,6 +140,7 @@ target_compile_definitions(proxygen_external_http_parser_obj PRIVATE HTTP_PARSER
 add_subdirectory(dns)
 add_subdirectory(healthcheck)
 add_subdirectory(http)
+add_subdirectory(http/experimental/llhttp)
 add_subdirectory(pools/generators)
 add_subdirectory(sampling)
 add_subdirectory(services)
@@ -151,6 +152,9 @@ add_subdirectory(utils)
 # Create monolithic proxygen library from all OBJECT targets
 # =============================================================================
 proxygen_create_monolithic_library()
+target_link_libraries(proxygen
+  INTERFACE proxygen_http_experimental_llhttp_definitions
+)
 
 # Add mvfst/HTTP3 dependencies to the monolithic library
 target_link_libraries(proxygen
