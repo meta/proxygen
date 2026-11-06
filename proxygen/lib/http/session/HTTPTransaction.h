@@ -224,7 +224,8 @@ class HTTPTransactionHandler : public TraceEventObserver {
    * is completed (EOF is received in the case of CONNECT), onEOM() callback
    * will be invoked.
    */
-  virtual void onUpgrade(UpgradeProtocol protocol) noexcept = 0;
+  virtual void onUpgrade(UpgradeProtocol) noexcept {
+  }
 
   /**
    * Can be called at any time before detachTransaction(). This callback
