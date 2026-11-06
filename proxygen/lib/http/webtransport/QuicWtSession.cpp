@@ -379,7 +379,12 @@ void QuicWtSessionBase::StreamManagerCallback::eventsAvailableImpl() noexcept {
     if (streamData.fin) {
       sock->setStopSendingCallback(streamId, nullptr);
     } else if (isWtStreamEgressFcBlocked(sess.sm_, *wh)) {
-      sess.quicSocket_->notifyPendingWriteOnStream(streamId, &sess);
+      // The cached window may lag the peer's MAX_STREAM_DATA; refreshing it
+      // here saves a loop iteration through notifyPendingWriteOnStream.
+      grantMaxData(*sock, sess.sm_, *wh);
+      if (isWtStreamEgressFcBlocked(sess.sm_, *wh)) {
+        sess.quicSocket_->notifyPendingWriteOnStream(streamId, &sess);
+      }
     }
   }
 }

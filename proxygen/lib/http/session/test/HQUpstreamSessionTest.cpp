@@ -2716,7 +2716,7 @@ TEST_P(H3WtUpstreamTest, SimpleUniEgress) {
   EXPECT_EQ(writeRes.value(), WebTransport::FCState::BLOCKED);
   // data written to underlying quic socket
   const auto& quicStream = socketDriver_->streams_.at(id);
-  EXPECT_TRUE(quicStream.pendingWriteCb.stream); // installed when 64KiB written
+  EXPECT_FALSE(quicStream.pendingWriteCb.stream); // refreshed fc is not blocked
   loopN(1);
   EXPECT_EQ(quicStream.nextWriteOffset, kBufLen + wtPrefixSize);
 
