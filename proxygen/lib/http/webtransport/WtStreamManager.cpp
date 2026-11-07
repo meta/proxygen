@@ -939,7 +939,7 @@ folly::SemiFuture<StreamData> ReadHandle::readStreamData() {
     auto res = StreamData{ingress_.chain.pop(), ingress_.fin};
     XLOG(DBG6) << __func__ << "; len=" << len << "; fin=" << res.fin;
     if (rcb_) {
-      rcb_->readReady(*this);
+      rcb_->readReady(*this, len);
     }
     finish(ingress_.fin);
     return folly::makeSemiFuture(std::move(res));
@@ -984,7 +984,7 @@ Result ReadHandle::enqueue(StreamData&& data) noexcept {
     smAccessor_.maybeGrantFc(ingress_.fin ? nullptr : this, len);
     p.setValue(StreamData{ingress_.chain.pop(), ingress_.fin});
     if (rcb_) {
-      rcb_->readReady(*this);
+      rcb_->readReady(*this, len);
     }
     finish(ingress_.fin);
   } else if (state_ == ReadHandleState::HalfClosed && ingress_.fin) {

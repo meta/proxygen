@@ -15,7 +15,6 @@ using namespace proxygen::detail;
 using FCState = WebTransport::FCState;
 
 namespace {
-static constexpr uint64_t kMaxWtIngressBuf = 65'535;
 static constexpr uint64_t kDefaultWtWrite = 65'535;
 
 using WtConfig = WtStreamManager::WtConfig;
@@ -26,14 +25,17 @@ WtConfig& overwritePeerMaxDataWtConfig(WtConfig& config) {
   return config;
 }
 
-WtConfig createQuicConfig() {
+WtConfig createQuicConfig(const quic::TransportSettings& settings) {
   WtConfig config;
   config.selfMaxStreamsBidi = kMaxVarint;
   config.selfMaxStreamsUni = kMaxVarint;
   config.selfMaxConnData = kMaxVarint;
-  config.selfMaxStreamDataBidiLocal = kMaxWtIngressBuf;
-  config.selfMaxStreamDataBidiRemote = kMaxWtIngressBuf;
-  config.selfMaxStreamDataUni = kMaxWtIngressBuf;
+  config.selfMaxStreamDataBidiLocal =
+      settings.advertisedInitialBidiLocalStreamFlowControlWindow;
+  config.selfMaxStreamDataBidiRemote =
+      settings.advertisedInitialBidiRemoteStreamFlowControlWindow;
+  config.selfMaxStreamDataUni =
+      settings.advertisedInitialUniStreamFlowControlWindow;
   config.peerMaxStreamsBidi = kMaxVarint;
   config.peerMaxStreamsUni = kMaxVarint;
   config.peerMaxConnData = kMaxVarint;
@@ -187,9 +189,17 @@ auto QuicWtSessionBase::createWtEgressHandle(StreamId id) noexcept
   quicSocket_->setStopSendingCallback(id, &stopSendingCb_);
   if (bidi) {
     sm_.setReadCb(*res.readHandle, &smCb_);
-    quicSocket_->setReadCallback(id, &readCb_);
+    installReadCallback(id);
   }
   return res;
+}
+
+void QuicWtSessionBase::installReadCallback(StreamId id) noexcept {
+  quicSocket_->setReadCallback(id, &readCb_);
+  if (manualRead_) {
+    auto res = quicSocket_->setStreamManualRead(id);
+    XLOG_IF(ERR, res.hasError()) << __func__ << "; err id=" << id;
+  }
 }
 
 bool QuicWtSessionBase::hasEgressUniCredit() const noexcept {
@@ -330,7 +340,13 @@ void QuicWtSessionBase::QuicStopSendingCallback::onStopSending(
 
 // -- StreamManagerCallback overrides --
 void QuicWtSessionBase::StreamManagerCallback::readReady(
-    WtStreamManager::WtReadHandle& rh) noexcept {
+    WtStreamManager::WtReadHandle& rh, uint64_t bytesRead) noexcept {
+  if (sess.manualRead_) {
+    // fails harmlessly after stopSending, which already released everything
+    auto res =
+        sess.quicSocket_->releaseManualReadFlowControl(rh.getID(), bytesRead);
+    XLOG_IF(DBG4, res.hasError()) << __func__ << "; err id=" << rh.getID();
+  }
   sess.maybeResumeIngress(rh);
 }
 
@@ -439,7 +455,7 @@ bool QuicWtSessionBase::acquireIngressStream(uint64_t id) noexcept {
   XLOG(DBG6) << __func__ << "; id=" << id << "; ok=" << success;
   if (success) {
     sm_.setReadCb(*handle.readHandle, &smCb_);
-    quicSocket_->setReadCallback(id, &readCb_);
+    installReadCallback(id);
     if (bidi) {
       quicSocket_->setStopSendingCallback(id, &stopSendingCb_);
       grantMaxData(*quicSocket_, sm_, *handle.writeHandle);
@@ -461,21 +477,23 @@ bool QuicWtSessionBase::acquireIngressStream(uint64_t id) noexcept {
 QuicWtSession::QuicWtSession(std::shared_ptr<quic::QuicSocket> quicSocket,
                              std::unique_ptr<WebTransportHandler> wtHandler)
     : QuicWtSession(
-          std::move(quicSocket),
+          quicSocket,
           WtHandlerPtr{wtHandler.release(), WtHandlerDeleter{.owning = true}}) {
 }
 
 QuicWtSession::QuicWtSession(std::shared_ptr<quic::QuicSocket> quicSocket,
                              WebTransportHandler* wtHandler)
     : QuicWtSession(
-          std::move(quicSocket),
+          quicSocket,
           WtHandlerPtr{wtHandler, WtHandlerDeleter{.owning = false}}) {
 }
 
-QuicWtSession::QuicWtSession(std::shared_ptr<quic::QuicSocket> quicSocket,
-                             WtHandlerPtr wtHandler)
-    : QuicWtSessionBase(
-          std::move(quicSocket), std::move(wtHandler), createQuicConfig()) {
+QuicWtSession::QuicWtSession(
+    const std::shared_ptr<quic::QuicSocket>& quicSocket, WtHandlerPtr wtHandler)
+    : QuicWtSessionBase(quicSocket,
+                        std::move(wtHandler),
+                        createQuicConfig(quicSocket->getTransportSettings())) {
+  manualRead_ = true;
   quicSocket_->setConnectionCallback(&connCb_);
   quicSocket_->setDatagramCallback(&dgramCb_);
 }

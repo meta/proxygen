@@ -1167,7 +1167,7 @@ using WtWriteHandle = WebTransport::StreamWriteHandle;
 
 struct WtReadCallback : WtStreamManager::ReadCallback {
   ~WtReadCallback() override = default;
-  void readReady(WtReadHandle&) noexcept override {
+  void readReady(WtReadHandle&, uint64_t) noexcept override {
     signalled = true;
   }
 

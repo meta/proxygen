@@ -21,7 +21,7 @@ using quic::MockQuicSocketDriver;
 namespace {
 constexpr uint32_t WT_ERROR_1 = 19;
 constexpr uint32_t WT_ERROR_2 = 77;
-constexpr uint64_t kMaxWtIngressBuf = 65'535;
+constexpr uint64_t kMaxWtIngressBuf = quic::kDefaultStreamFlowControlWindow;
 
 class MockDeliveryCallback : public WebTransport::ByteEventCallback {
  public:
@@ -972,6 +972,43 @@ TEST_F(QuicWtSessionTest, IngressBackpressure) {
             MockQuicSocketDriver::OPEN);
   EXPECT_EQ(socketDriver_.streams_[streamId2].readState,
             MockQuicSocketDriver::PAUSED);
+}
+
+TEST_F(QuicWtSessionTest, ReleaseFlowControlOnAppRead) {
+  // peer opens a bidi stream; quic credit is released only once the app reads
+  auto sock = socketDriver_.getSocket();
+  EXPECT_CALL(*sock, setStreamManualRead(0));
+  WebTransport::StreamReadHandle* readHandle = nullptr;
+  EXPECT_CALL(*handler_, onNewBidiStream(_))
+      .WillOnce([&](WebTransport::BidiStreamHandle handle) {
+        readHandle = handle.readHandle;
+      });
+  EXPECT_CALL(*sock, releaseManualReadFlowControl(_, _)).Times(0);
+  socketDriver_.addReadEvent(0, folly::IOBuf::copyBuffer("hello"), false);
+  eventBase_.loopOnce();
+  ASSERT_NE(readHandle, nullptr);
+
+  EXPECT_CALL(*sock, releaseManualReadFlowControl(0, 5));
+  auto fut = readHandle->readStreamData();
+  EXPECT_TRUE(fut.isReady());
+}
+
+TEST_F(QuicWtSessionTest, StopSendingUnreadLeavesReleaseToQuic) {
+  // peer uni stream data+fin is buffered; app stops sending without reading.
+  // quic's stopSending releases the held credit, even for a removed stream.
+  auto sock = socketDriver_.getSocket();
+  WebTransport::StreamReadHandle* readHandle = nullptr;
+  EXPECT_CALL(*handler_, onNewUniStream(_))
+      .WillOnce(
+          [&](WebTransport::StreamReadHandle* handle) { readHandle = handle; });
+  socketDriver_.addReadEvent(2, folly::IOBuf::copyBuffer("hello"), true);
+  eventBase_.loopOnce();
+  ASSERT_NE(readHandle, nullptr);
+
+  EXPECT_CALL(*sock, releaseManualReadFlowControl(_, _)).Times(0);
+  EXPECT_CALL(*sock, stopSending(2, WT_ERROR_1));
+  readHandle->stopSending(WT_ERROR_1);
+  eventBase_.loopOnce();
 }
 
 /*
