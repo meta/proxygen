@@ -280,7 +280,8 @@ int main(int argc, char* argv[]) {
         if (colon != folly::StringPiece::npos) {
           auto key = folly::trimWhitespace(pair.subpiece(0, colon));
           auto val = folly::trimWhitespace(pair.subpiece(colon + 1));
-          options.httpRequest_->getHeaders().set(key.str(), val.str());
+          options.httpRequest_->getHeaders().set(std::string(key),
+                                                 std::string(val));
         }
       }
     }

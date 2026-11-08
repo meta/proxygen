@@ -8,6 +8,9 @@
 
 #include <proxygen/lib/http/codec/CodecProtocol.h>
 
+#include <algorithm>
+#include <string_view>
+
 #include <folly/String.h>
 #include <proxygen/lib/http/codec/HTTP2Constants.h>
 #include <proxygen/lib/http/codec/HTTPCodec.h>
@@ -113,14 +116,18 @@ extern bool serverAcceptedUpgrade(const std::string& clientUpgrade,
   }
 
   for (const auto& cp : clientProtocols) {
-    auto cpt = folly::trimWhitespace(cp);
+    const std::string_view cpt = folly::trimWhitespace(cp);
     if (cpt.empty()) {
       continue;
     }
     if (std::any_of(serverProtocols.begin(),
                     serverProtocols.end(),
                     [cpt](const auto& sp) {
-                      return cpt.equals(sp, folly::AsciiCaseInsensitive{});
+                      return std::equal(cpt.begin(),
+                                        cpt.end(),
+                                        sp.begin(),
+                                        sp.end(),
+                                        folly::AsciiCaseInsensitive{});
                     })) {
       return true;
     }

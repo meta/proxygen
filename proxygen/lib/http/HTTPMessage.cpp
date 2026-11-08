@@ -9,11 +9,13 @@
 #include <proxygen/lib/http/HTTPMessage.h>
 
 #include <array>
+#include <mutex>
+#include <string>
+
 #include <folly/Conv.h>
 #include <folly/Range.h>
 #include <folly/SingletonThreadLocal.h>
 #include <folly/String.h>
-#include <mutex>
 
 using folly::StringPiece;
 using std::pair;
@@ -711,15 +713,15 @@ void HTTPMessage::splitNameValue(
     size_t valueDelimPos = keyValue.find(valueDelim);
     if (valueDelimPos == string::npos) {
       // Key only query param
-      string name = folly::trimWhitespace(keyValue).str();
+      string name = string(folly::trimWhitespace(keyValue));
       string value;
 
       callback(std::move(name), std::move(value));
     } else {
       string name =
-          folly::trimWhitespace(keyValue.subpiece(0, valueDelimPos)).str();
+          string(folly::trimWhitespace(keyValue.subpiece(0, valueDelimPos)));
       string value =
-          folly::trimWhitespace(keyValue.subpiece(valueDelimPos + 1)).str();
+          string(folly::trimWhitespace(keyValue.subpiece(valueDelimPos + 1)));
 
       callback(std::move(name), std::move(value));
     }

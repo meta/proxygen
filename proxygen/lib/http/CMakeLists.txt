@@ -185,6 +185,7 @@ proxygen_add_library(proxygen_http_message
     proxygen_utils_parse_url
     proxygen_utils_time_util
     Folly::folly_conv
+    Folly::folly_cpp_attributes
     Folly::folly_io_iobuf
     Folly::folly_network_address
     Folly::folly_optional
