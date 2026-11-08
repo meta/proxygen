@@ -276,6 +276,11 @@ QuicWtSessionBase::sendDatagram(IoBufPtr datagram) noexcept {
 
 folly::Expected<folly::Unit, WebTransport::ErrorCode>
 QuicWtSessionBase::closeSession(folly::Optional<uint32_t> error) noexcept {
+  for (auto streamId : sm_.streamIds()) {
+    if (sm_.getBidiHandle(streamId).readHandle) {
+      quicSocket_->setReadCallback(streamId, nullptr, std::nullopt);
+    }
+  }
   sm_.shutdown({.err = error.value_or(0), .msg = "closeSession"});
   if (auto wtHandler = std::exchange(wtHandler_, nullptr)) {
     wtHandler->onSessionEnd(error);
@@ -317,6 +322,9 @@ void QuicWtSessionBase::QuicReadCallback::readAvailable(StreamId id) noexcept {
     return;
   }
   auto& [data, eof] = readRes.value();
+  if (eof) {
+    quicSocket->setReadCallback(id, nullptr, std::nullopt);
+  }
   auto res = sm.enqueue(
       *rh, WebTransport::StreamData{.data = std::move(data), .fin = eof});
   XCHECK_NE(res, WtStreamManager::Result::Fail);

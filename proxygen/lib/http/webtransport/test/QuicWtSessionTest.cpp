@@ -12,6 +12,9 @@
 #include <proxygen/lib/http/session/test/MockQuicSocketDriver.h>
 #include <proxygen/lib/http/webtransport/QuicWtSession.h>
 #include <proxygen/lib/http/webtransport/test/Mocks.h>
+#include <quic/api/test/TestQuicTransport.h>
+#include <quic/common/testutil/MockAsyncUDPSocket.h>
+#include <quic/state/stream/StreamReceiveHandlers.h>
 
 using namespace proxygen;
 using namespace proxygen::test;
@@ -1289,4 +1292,113 @@ TEST_F(H3WtSessionTest, SendDatagramLargeConnectStreamId) {
   EXPECT_EQ(remaining, "hi");
 
   session->closeSession(folly::none);
+}
+
+class QuicWtSessionReadCallbackTest : public Test {
+ protected:
+  class Transport final : public quic::TestQuicTransport {
+   public:
+    Transport(std::shared_ptr<quic::QuicEventBase> eventBase,
+              std::unique_ptr<quic::QuicAsyncUDPSocket> socket)
+        : quic::QuicTransportBaseLite(eventBase, std::move(socket)),
+          quic::TestQuicTransport(
+              std::move(eventBase), nullptr, nullptr, nullptr) {
+    }
+    using quic::TestQuicTransport::invokeReadDataAndCallbacks;
+
+    bool hasReadCallback(quic::StreamId streamId) const {
+      auto callback = readCallbacks_.find(streamId);
+      return callback != readCallbacks_.end() && callback->second.readCb;
+    }
+  };
+
+  void SetUp() override {
+    auto quicEventBase =
+        std::make_shared<quic::FollyQuicEventBase>(&eventBase_);
+    transport_ = std::make_shared<Transport>(
+        quicEventBase,
+        std::make_unique<NiceMock<quic::test::MockAsyncUDPSocket>>(
+            quicEventBase));
+    auto& connection = transport_->getConnectionState();
+    connection.flowControlState.peerAdvertisedInitialMaxStreamOffsetBidiLocal =
+        quic::kDefaultStreamFlowControlWindow;
+    connection.flowControlState.peerAdvertisedInitialMaxStreamOffsetUni =
+        quic::kDefaultStreamFlowControlWindow;
+    connection.flowControlState.peerAdvertisedMaxOffset =
+        quic::kDefaultConnectionFlowControlWindow;
+    ASSERT_FALSE(connection.streamManager->setMaxLocalBidirectionalStreams(1)
+                     .hasError());
+    ASSERT_FALSE(connection.streamManager->setMaxLocalUnidirectionalStreams(1)
+                     .hasError());
+    EXPECT_CALL(handler_, onSessionEnd(folly::Optional<uint32_t>{folly::none}));
+    session_ = std::make_unique<QuicWtSession>(transport_, &handler_);
+  }
+
+  void TearDown() override {
+    auto session = std::move(session_);
+    session.reset();
+    transport_->closeNow(std::nullopt);
+  }
+
+  void destroyDuringByteCancellation(bool readEOF) {
+    auto bidi = session_->createBidiStream();
+    ASSERT_TRUE(bidi.hasValue());
+    const auto readId = bidi->readHandle->getID();
+    ASSERT_TRUE(transport_->hasReadCallback(readId));
+    if (readEOF) {
+      auto read = bidi->readHandle->readStreamData();
+      ASSERT_FALSE(read.isReady());
+      ASSERT_TRUE(bidi->writeHandle->writeStreamData(nullptr, true, nullptr)
+                      .hasValue());
+      auto* stream =
+          transport_->getConnectionState().streamManager->getStreamIfExists(
+              readId);
+      ASSERT_NE(stream, nullptr);
+      quic::ReadStreamFrame frame(readId, 0, true);
+      frame.data = folly::IOBuf::create(0);
+      ASSERT_FALSE(
+          quic::receiveReadStreamFrameSMHandler(*stream, std::move(frame))
+              .hasError());
+      transport_->invokeReadDataAndCallbacks(true);
+      ASSERT_TRUE(read.isReady());
+      EXPECT_TRUE(read.value().fin);
+      ASSERT_TRUE(session_->readStreamData(readId).hasError());
+      ASSERT_TRUE(
+          transport_->getConnectionState().streamManager->streamExists(readId));
+    }
+
+    auto written = session_->createUniStream();
+    ASSERT_TRUE(written.hasValue());
+    const auto writtenId = written.value()->getID();
+    EXPECT_CALL(delivery_, onByteEventCanceled(writtenId, _))
+        .WillOnce([this, readId](auto, auto) {
+          EXPECT_EQ(transport_->closeState(), quic::CloseState::CLOSED);
+          session_.reset();
+          EXPECT_FALSE(transport_->hasReadCallback(readId));
+        });
+    ASSERT_TRUE(written.value()
+                    ->writeStreamData(
+                        folly::IOBuf::copyBuffer("data"), false, &delivery_)
+                    .hasValue());
+    ASSERT_EQ(transport_->getNumByteEventCallbacksForStream(writtenId), 1);
+
+    transport_->closeNow(
+        quic::QuicError(quic::LocalErrorCode::CONNECTION_CLOSED));
+    EXPECT_FALSE(session_);
+  }
+
+  folly::EventBase eventBase_;
+  std::shared_ptr<Transport> transport_;
+  StrictMock<MockWebTransportHandler> handler_;
+  StrictMock<MockDeliveryCallback> delivery_;
+  std::unique_ptr<QuicWtSession> session_;
+};
+
+TEST_F(QuicWtSessionReadCallbackTest, DestroyDuringByteCancellation) {
+  destroyDuringByteCancellation(false);
+}
+
+TEST_F(QuicWtSessionReadCallbackTest,
+       ReadEOFBeforeDestroyDuringByteCancellation) {
+  destroyDuringByteCancellation(true);
 }
