@@ -11,6 +11,7 @@
 #include "proxygen/lib/http/coro/client/HTTPClientConnectionCache.h"
 #include "proxygen/lib/http/coro/client/HTTPCoroConnector.h"
 #include "proxygen/lib/http/coro/client/HTTPCoroSessionPool.h"
+#include "proxygen/lib/http/coro/client/ProxygenCertVerifier.h"
 #include "proxygen/lib/http/coro/client/test/HTTPClientTestsCommon.h"
 #include "proxygen/lib/http/coro/test/HTTPTestSources.h"
 #include "proxygen/lib/http/coro/util/test/TestHelpers.h"
@@ -32,6 +33,7 @@
 #include <folly/ssl/OpenSSLKeyUtils.h>
 #include <folly/ssl/OpenSSLPtrTypes.h>
 #include <folly/testing/TestUtil.h>
+#include <optional>
 #include <quic/api/test/Mocks.h>
 #include <quic/state/test/Mocks.h>
 #include <variant>
@@ -314,10 +316,14 @@ CO_TEST_P_X(HTTPClientTests, IdentityVerificationE2E) {
     tlsParams.nextProtocols = {"h2", "http/1.1"};
     HTTPCoroConnector::ConnectionParams connParams;
     connParams.serverName = sni;
-    connParams.identityValidation =
-        HTTPCoroConnector::IdentityValidation::Enforcing;
     connParams.fizzContextAndVerifier =
-        HTTPCoroConnector::makeFizzClientContextAndVerifier(tlsParams);
+        HTTPCoroConnector::FizzContextAndVerifier::createWithContext(tlsParams);
+    // The generated CA does not exist when the process-wide verifier loads.
+    connParams.fizzContextAndVerifier.fizzCertVerifier =
+        makeVerifier(HTTPCoroConnector::makeFizzCertVerifier(tlsParams),
+                     ExpectedIdentity::expectDNS(sni),
+                     ValidationPolicy::Enforcing,
+                     {});
     return HTTPCoroConnector_connect(
         &evb_, serverAddr, seconds(1), std::move(connParams));
   };
