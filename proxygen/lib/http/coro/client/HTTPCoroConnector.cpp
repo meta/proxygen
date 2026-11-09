@@ -871,7 +871,6 @@ std::shared_ptr<folly::SSLContext> HTTPCoroConnector::makeSSLContext(
   return sslContext;
 }
 
-// To be deprecated after refactoring.
 std::shared_ptr<const fizz::client::FizzClientContext>
 HTTPCoroConnector::makeFizzClientContext(const TLSParams& params) {
   auto fizzContext = std::make_shared<fizz::client::FizzClientContext>();
@@ -910,56 +909,18 @@ HTTPCoroConnector::makeFizzClientContext(const TLSParams& params) {
   return fizzContext;
 }
 
-// To be deprecated after refactoring.
 std::shared_ptr<const fizz::CertificateVerifier>
 HTTPCoroConnector::makeFizzCertVerifier(const TLSParams& params) {
   return createFizzCertVerifier(params.caPaths);
 }
 
-HTTPCoroConnector::FizzContextAndVerifier createWithContext(
-    const HTTPCoroConnector::TLSParams& params) {
+HTTPCoroConnector::FizzContextAndVerifier
+HTTPCoroConnector::FizzContextAndVerifier::createWithContext(
+    const TLSParams& params) {
   return {.fizzContext = HTTPCoroConnector::makeFizzClientContext(params),
           .fizzCertVerifier = nullptr};
 }
 
-HTTPCoroConnector::FizzContextAndVerifier
-HTTPCoroConnector::FizzContextAndVerifier::create() {
-  return createWithContext(
-      HTTPCoroConnector::makeFizzClientContext(defaultTLSParams()));
-}
-
-HTTPCoroConnector::FizzContextAndVerifier
-HTTPCoroConnector::FizzContextAndVerifier::createWithContext(
-    std::shared_ptr<const fizz::client::FizzClientContext> context) {
-  return createWithContextAndVerifier(std::move(context), nullptr);
-}
-
-HTTPCoroConnector::FizzContextAndVerifier
-HTTPCoroConnector::FizzContextAndVerifier::createWithContextAndVerifier(
-    std::shared_ptr<const fizz::client::FizzClientContext> context,
-    std::shared_ptr<const fizz::CertificateVerifier> verifier) {
-  return {.fizzContext = std::move(context),
-          .fizzCertVerifier = std::move(verifier)};
-}
-
-HTTPCoroConnector::FizzContextAndVerifier createWithContextAndVerifier(
-    const HTTPCoroConnector::TLSParams& params,
-    std::shared_ptr<const fizz::CertificateVerifier> verifier) {
-  return HTTPCoroConnector::FizzContextAndVerifier::
-      createWithContextAndVerifier(
-          HTTPCoroConnector::makeFizzClientContext(params),
-          std::move(verifier));
-}
-
-HTTPCoroConnector::FizzContextAndVerifier createWithContextAndVerifier(
-    const HTTPCoroConnector::TLSParams& params) {
-  auto context = HTTPCoroConnector::makeFizzClientContext(params);
-  auto verifier = HTTPCoroConnector::makeFizzCertVerifier(params);
-  return HTTPCoroConnector::FizzContextAndVerifier::
-      createWithContextAndVerifier(std::move(context), std::move(verifier));
-}
-
-// To be deprecated after refactoring.
 HTTPCoroConnector::FizzContextAndVerifier
 HTTPCoroConnector::makeFizzClientContextAndVerifier(const TLSParams& params) {
   FizzContextAndVerifier fizzCtx;
