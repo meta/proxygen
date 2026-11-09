@@ -472,10 +472,6 @@ void Client::TransactionHandler::onEOM() noexcept {
   }
 }
 
-void Client::TransactionHandler::onUpgrade(
-    ::proxygen::UpgradeProtocol /*protocol*/) noexcept {
-}
-
 void Client::TransactionHandler::onError(
     const ::proxygen::HTTPException& error) noexcept {
   parent_->stats_.addErrorLat(millisecondsSince(requestStart_).count());

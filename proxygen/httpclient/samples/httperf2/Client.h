@@ -121,8 +121,6 @@ class Client
 
     void onEOM() noexcept override;
 
-    void onUpgrade(proxygen::UpgradeProtocol prot) noexcept override;
-
     void onError(const ::proxygen::HTTPException& error) noexcept override;
 
     void onEgressPaused() noexcept override {

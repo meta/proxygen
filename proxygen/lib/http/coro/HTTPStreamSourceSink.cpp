@@ -36,8 +36,6 @@ class NoopTxnHandler : public HTTPTransactionHandler {
   }
   void onEOM() noexcept override {
   }
-  void onUpgrade(UpgradeProtocol) noexcept override {
-  }
   void onError(const HTTPException&) noexcept override {
   }
   void onInvariantViolation(const HTTPException&) noexcept override {

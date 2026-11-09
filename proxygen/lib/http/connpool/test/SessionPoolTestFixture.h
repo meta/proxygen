@@ -138,8 +138,6 @@ class SessionPoolFixture
   }
   void onEOM() noexcept override {
   }
-  void onUpgrade(UpgradeProtocol /*protocol*/) noexcept override {
-  }
   void onError(const HTTPException& /*error*/) noexcept override {
   }
   void onEgressPaused() noexcept override {

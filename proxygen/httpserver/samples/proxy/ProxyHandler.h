@@ -96,9 +96,6 @@ class ProxyHandler
     void onEOM() noexcept override {
       parent_.onServerEOM();
     }
-    void onUpgrade(proxygen::UpgradeProtocol /*protocol*/) noexcept override {
-      // ignore for now
-    }
 
     void onError(const proxygen::HTTPException& error) noexcept override {
       parent_.onServerError(error);

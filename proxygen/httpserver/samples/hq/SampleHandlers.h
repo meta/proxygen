@@ -93,9 +93,6 @@ class BaseSampleHandler : public proxygen::HTTPTransactionHandler {
       std::unique_ptr<proxygen::HTTPHeaders> /*trailers*/) noexcept override {
   }
 
-  void onUpgrade(proxygen::UpgradeProtocol /*protocol*/) noexcept override {
-  }
-
   void onEgressPaused() noexcept override {
   }
 

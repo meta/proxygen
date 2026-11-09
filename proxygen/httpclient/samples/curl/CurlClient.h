@@ -44,9 +44,6 @@ class CurlClient
         std::unique_ptr<proxygen::HTTPHeaders> /*trailers*/) noexcept override {
     }
 
-    void onUpgrade(proxygen::UpgradeProtocol /*protocol*/) noexcept override {
-    }
-
     void onEgressResumed() noexcept override {
     }
 

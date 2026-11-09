@@ -62,8 +62,6 @@ struct WebTransportTxnHandler final : public HTTPTransactionHandler {
   BufferedIngress moveBufferedIngress() noexcept;
 
   // ignored
-  void onUpgrade(UpgradeProtocol) noexcept final {
-  }
   void onTrailers(std::unique_ptr<HTTPHeaders>) noexcept final {
   }
 
@@ -198,8 +196,6 @@ class WtClientCallback final
   void onTrailers(std::unique_ptr<HTTPHeaders>) noexcept override {
   }
   void onEOM() noexcept override {
-  }
-  void onUpgrade(UpgradeProtocol) noexcept override {
   }
   void onEgressPaused() noexcept override {
   }

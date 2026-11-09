@@ -46,7 +46,6 @@ class HTTPTransactionAdaptorSource
   void onBody(std::unique_ptr<folly::IOBuf> chain) noexcept override;
   void onTrailers(std::unique_ptr<HTTPHeaders> trailers) noexcept override;
   void onEOM() noexcept override;
-  void onUpgrade(UpgradeProtocol protocol) noexcept override;
   void onError(const HTTPException& error) noexcept override;
   void onEgressPaused() noexcept override;
   void onEgressResumed() noexcept override;

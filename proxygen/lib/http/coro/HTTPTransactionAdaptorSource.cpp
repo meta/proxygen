@@ -106,11 +106,6 @@ void HTTPTransactionAdaptorSource::onEOM() noexcept {
   ingressSource_.eom();
 }
 
-void HTTPTransactionAdaptorSource::onUpgrade(
-    UpgradeProtocol /* protocol */) noexcept {
-  // no-op
-}
-
 void HTTPTransactionAdaptorSource::onError(
     const HTTPException& error) noexcept {
   ingressSource_.abort(

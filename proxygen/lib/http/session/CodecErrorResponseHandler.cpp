@@ -44,10 +44,6 @@ void CodecErrorResponseHandler::onTrailers(
 void CodecErrorResponseHandler::onEOM() noexcept {
 }
 
-void CodecErrorResponseHandler::onUpgrade(
-    UpgradeProtocol /*protocol*/) noexcept {
-}
-
 void CodecErrorResponseHandler::onError(const HTTPException& error) noexcept {
   VLOG(4) << "processing error " << error;
   txn_->sendAbort();

@@ -157,8 +157,6 @@ class SizeHandler
       txn_->sendEOM();
     }
   }
-  void onUpgrade(UpgradeProtocol) noexcept override {
-  }
   void onError(const HTTPException& error) noexcept override {
     if (error.getDirection() == HTTPException::Direction::INGRESS && txn_) {
       txn_->sendAbort();

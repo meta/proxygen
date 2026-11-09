@@ -91,10 +91,6 @@ void HTTPDirectResponseHandler::onEOM() noexcept {
   txn_->sendEOM();
 }
 
-void HTTPDirectResponseHandler::onUpgrade(
-    UpgradeProtocol /*protocol*/) noexcept {
-}
-
 void HTTPDirectResponseHandler::onError(const HTTPException& error) noexcept {
   if (error.hasProxygenError()) {
     err_ = error.getProxygenError();

@@ -25,7 +25,6 @@ class CodecErrorResponseHandler : public HTTPTransaction::Handler {
   void onBody(std::unique_ptr<folly::IOBuf> chain) noexcept override;
   void onTrailers(std::unique_ptr<HTTPHeaders> trailers) noexcept override;
   void onEOM() noexcept override;
-  void onUpgrade(UpgradeProtocol protocol) noexcept override;
   void onError(const HTTPException& error) noexcept override;
   // These are no-ops since the error response is already in memory
   void onEgressPaused() noexcept override {
