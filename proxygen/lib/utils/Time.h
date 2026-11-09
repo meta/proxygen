@@ -118,18 +118,28 @@ inline std::chrono::seconds secondsSince(std::chrono::time_point<ClockType> t) {
 }
 
 /**
+ * Format the given Unix timestamp in the host's local timezone as date and time
+ * strings: %Y-%m-%d and %H:%M:%S.
+ */
+inline void toDateTimeStrLocalTime(time_t t,
+                                   char datebuf[32],
+                                   char timebuf[32]) {
+  struct tm local_tm{};
+  localtime_r(&t, &local_tm);
+  if (datebuf) {
+    strftime(datebuf, sizeof(char) * 32, "%Y-%m-%d", &local_tm);
+  }
+  if (timebuf) {
+    strftime(timebuf, sizeof(char) * 32, "%H:%M:%S", &local_tm);
+  }
+}
+
+/**
  * Get the current date and time in string formats: %Y-%m-%d and %H:%M:%S.
  */
 inline void getDateTimeStr(char datebuf[32], char timebuf[32]) {
-  time_t now = toTimeT(getCurrentTime<SteadyClock>());
-  struct tm now_tm;
-  localtime_r(&now, &now_tm);
-  if (datebuf) {
-    strftime(datebuf, sizeof(char) * 32, "%Y-%m-%d", &now_tm);
-  }
-  if (timebuf) {
-    strftime(timebuf, sizeof(char) * 32, "%H:%M:%S", &now_tm);
-  }
+  toDateTimeStrLocalTime(
+      toTimeT(getCurrentTime<SteadyClock>()), datebuf, timebuf);
 }
 
 /**
