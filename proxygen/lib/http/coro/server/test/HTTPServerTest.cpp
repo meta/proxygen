@@ -196,9 +196,11 @@ class HTTPServerTests : public TestWithParam<TransportType> {
     tlsConfig.setNextProtocols({"h2", "http/1.1"});
     try {
       const std::string kTestDir{getTestDir()};
-      tlsConfig.setCertificate(kTestDir + "certs/test_cert1.pem",
-                               kTestDir + "certs/test_key1.pem",
-                               "");
+      tlsConfig.setCertificate(
+          folly::test::find_resource(kTestDir + "certs/test_cert1.pem")
+              .string(),
+          folly::test::find_resource(kTestDir + "certs/test_key1.pem").string(),
+          "");
     } catch (const std::exception& ex) {
       XLOG(ERR) << "Invalid certificate file or key file: %s" << ex.what();
     }
@@ -492,7 +494,9 @@ TEST_P(HTTPServerTests, TestUpdateTLSCredentials) {
   const std::string testDir{getTestDir()};
   const std::string credFilePath{credFile.path().string()};
 
-  copyCreds(testDir + "certs/test_cert1.pem", testDir + "certs/test_key1.pem");
+  copyCreds(
+      folly::test::find_resource(testDir + "certs/test_cert1.pem").string(),
+      folly::test::find_resource(testDir + "certs/test_key1.pem").string());
   // set tlsConfig certificate to tmp file
   auto tlsConfig = getTLSConfig();
   tlsConfig.setCertificate(credFilePath, credFilePath, "");
@@ -550,7 +554,9 @@ TEST_P(HTTPServerTests, TestUpdateTLSCredentials) {
   auto cert1 = blockingWait(doTlsConnection(), &evb);
 
   // update credFile to a different cert/key
-  copyCreds(testDir + "certs/test_cert2.pem", testDir + "certs/test_key2.pem");
+  copyCreds(
+      folly::test::find_resource(testDir + "certs/test_cert2.pem").string(),
+      folly::test::find_resource(testDir + "certs/test_key2.pem").string());
   auto& httpServer = server_->getServer();
   httpServer.evb()->runImmediatelyOrRunInEventBaseThreadAndWait(
       [&]() { httpServer.updateTlsCredentials(); });
