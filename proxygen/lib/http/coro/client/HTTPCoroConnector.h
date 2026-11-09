@@ -124,9 +124,6 @@ class HTTPCoroConnector {
   }
 
   struct FizzContextAndVerifier {
-    // Uses the process-wide default verifier when no verifier is supplied.
-    static FizzContextAndVerifier createWithContext(const TLSParams& params);
-
     std::shared_ptr<const fizz::client::FizzClientContext> fizzContext;
     std::shared_ptr<const fizz::CertificateVerifier> fizzCertVerifier;
   };
