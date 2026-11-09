@@ -12,10 +12,6 @@
 
 namespace proxygen::coro {
 
-const char* FOLLY_NULLABLE getFallbackCABundle() {
-  return nullptr;
-}
-
 CertVerifyLogFn getCertVerifyLogFn() noexcept {
   return nullptr;
 }

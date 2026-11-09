@@ -10,8 +10,6 @@
 
 namespace proxygen::coro {
 
-inline constexpr char kFallbackCABundle[] = R"(
-{{CA_BUNDLE}}
-)";
+const char* getFallbackCAPath();
 
 } // namespace proxygen::coro
