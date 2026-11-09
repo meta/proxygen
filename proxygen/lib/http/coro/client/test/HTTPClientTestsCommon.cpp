@@ -7,6 +7,7 @@
  */
 
 #include "proxygen/lib/http/coro/client/test/HTTPClientTestsCommon.h"
+#include <folly/testing/TestUtil.h>
 
 using folly::coro::co_nothrow;
 
@@ -22,10 +23,14 @@ namespace proxygen::coro::test {
       folly::SSLContext::VerifyClientCertificate::DO_NOT_REQUEST;
   tlsConfig.setNextProtocols({"h2", "http/1.1"});
   try {
-    const std::string kTestDir = getContainingDirectory(XLOG_FILENAME).str();
-    tlsConfig.setCertificate(kTestDir + "certs/test_cert1.pem",
-                             kTestDir + "certs/test_key1.pem",
-                             "");
+    tlsConfig.setCertificate(
+        folly::test::find_resource(
+            "proxygen/lib/http/coro/client/test/certs/test_cert1.pem")
+            .string(),
+        folly::test::find_resource(
+            "proxygen/lib/http/coro/client/test/certs/test_key1.pem")
+            .string(),
+        "");
   } catch (const std::exception& ex) {
     XLOG(ERR) << "Invalid certificate file or key file: %s" << ex.what();
   }
