@@ -8,7 +8,6 @@
 
 #include "proxygen/lib/http/coro/client/HTTPCoroConnector.h"
 #include "proxygen/lib/http/coro/client/CertVerificationHooks.h"
-#include "proxygen/lib/http/coro/client/TLS.h"
 #include <folly/logging/xlog.h>
 #include <proxygen/lib/http/codec/H3EarlyDataHandler.h>
 
@@ -32,6 +31,7 @@
 #include <folly/io/async/AsyncSSLSocket.h>
 #include <folly/io/async/Request.h>
 #include <folly/io/async/SSLOptions.h>
+#include <folly/ssl/OpenSSLCertUtils.h>
 #include <proxygen/lib/http/codec/DefaultHTTPCodecFactory.h>
 #include <quic/QuicException.h>
 #include <quic/api/QuicSocket.h>
@@ -633,9 +633,6 @@ static std::vector<std::string> getDefaultCAPath() {
   } else if (const char* curlCABundle = std::getenv("CURL_CA_BUNDLE");
              curlCABundle && *curlCABundle) {
     return {curlCABundle};
-  } else if (const char* fallbackPath = getFallbackCAPath();
-             fallbackPath && *fallbackPath) {
-    return {fallbackPath};
   }
   return {};
 }
@@ -863,22 +860,41 @@ HTTPCoroConnector::makeFizzCertVerifier(const TLSParams& params) {
   }
 
   Error err;
-  if (caPaths.empty()) {
-    FIZZ_THROW_ON_ERROR(err.error("HTTPCoroConnector::makeFizzCertVerifier "
-                                  "could not find suitable trust anchor store"),
-                        err);
+  std::unique_ptr<fizz::DefaultCertificateVerifier> verifier;
+  if (!caPaths.empty()) {
+    if (auto result = fizz::DefaultCertificateVerifier::createFromCAFiles(
+            verifier, err, fizz::VerificationContext::Client, caPaths);
+        result != Status::Success) {
+      FIZZ_THROW_ON_ERROR(err.error(fmt::format(
+                              "HTTPCoroConnector::makeFizzCertVerifier failed "
+                              "to initialize TLS trust anchors: {}",
+                              err.msg())),
+                          err);
+    }
+    return verifier;
   }
 
-  std::unique_ptr<fizz::DefaultCertificateVerifier> verifier;
-  if (auto result = fizz::DefaultCertificateVerifier::createFromCAFiles(
-          verifier, err, fizz::VerificationContext::Client, caPaths);
-      result != Status::Success) {
-    FIZZ_THROW_ON_ERROR(err.error(fmt::format(
-                            "HTTPCoroConnector::makeFizzCertVerifier failed to "
-                            "initialize TLS trust anchors: {}",
-                            err.msg())),
-                        err);
+  if (const char* bundle = getFallbackCABundle()) {
+    if (auto result = fizz::DefaultCertificateVerifier::create(
+            verifier,
+            err,
+            fizz::VerificationContext::Client,
+            folly::ssl::OpenSSLCertUtils::readStoreFromBuffer(
+                folly::StringPiece(bundle)));
+        result != Status::Success) {
+      FIZZ_THROW_ON_ERROR(
+          err.error(fmt::format(
+              "HTTPCoroConnector::makeFizzCertVerifier failed "
+              "to initialize TLS trust anchors with fallback CA bundle: {}",
+              err.msg())),
+          err);
+    }
+    return verifier;
   }
+
+  FIZZ_THROW_ON_ERROR(err.error("HTTPCoroConnector::makeFizzCertVerifier "
+                                "requires ca Path or ca Bundle."),
+                      err);
   return verifier;
 }
 

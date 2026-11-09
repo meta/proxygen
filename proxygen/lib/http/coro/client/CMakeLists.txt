@@ -34,13 +34,6 @@ proxygen_add_library(proxygen_cert_verifier
     Folly::folly_network_address
 )
 
-proxygen_add_library(proxygen_http_coro_client_tls
-  SRCS
-    TLS.cpp
-  EXPORTED_DEPS
-    proxygen_cert_verifier
-)
-
 proxygen_add_library(proxygen_http_coro_client_http_connector
   SRCS
     CertVerificationHooks.cpp
@@ -48,7 +41,6 @@ proxygen_add_library(proxygen_http_coro_client_http_connector
   DEPS
     proxygen_http_codec_codec_factory
     proxygen_http_codec_h3_early_data_handler
-    proxygen_http_coro_client_tls
     proxygen_http_coro_transport_coro_ssl_transport
     proxygen_http_coro_transport_http_connect_transport
     proxygen_http_coro_util_Transport
@@ -70,6 +62,7 @@ proxygen_add_library(proxygen_http_coro_client_http_connector
     Folly::folly_io_async_async_ssl_socket
     Folly::folly_io_async_ssl_options
     Folly::folly_logging_logging
+    Folly::folly_ssl_openssl_cert_utils
   EXPORTED_DEPS
     proxygen_cert_verifier
     proxygen_coro
@@ -83,6 +76,7 @@ proxygen_add_library(proxygen_http_coro_client_http_connector
     mvfst::mvfst_state_transport_settings
     fizz::fizz
     Folly::folly_coro_task
+    Folly::folly_cpp_attributes
     Folly::folly_io_async_async_socket
     Folly::folly_io_async_ssl_context
     Folly::folly_io_socket_option_map

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <folly/CppAttributes.h>
 #include <optional>
 
 #include "proxygen/lib/http/coro/client/HTTPCoroConnector.h"
@@ -19,5 +20,7 @@ std::optional<ValidationPolicy> getValidationPolicy(
     HTTPCoroConnector::IdentityValidation identityValidation);
 
 CertVerifyLogFn getCertVerifyLogFn() noexcept;
+
+const char* FOLLY_NULLABLE getFallbackCABundle();
 
 } // namespace proxygen::coro
