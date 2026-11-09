@@ -11,6 +11,7 @@
 
 #include <folly/FileUtil.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
+#include <folly/io/FsUtil.h>
 #include <folly/io/SocketOptionMap.h>
 #include <folly/io/async/AsyncSSLSocket.h>
 #include <folly/io/async/AsyncServerSocket.h>
@@ -41,7 +42,21 @@ using namespace CurlService;
 
 namespace {
 
-const std::string kTestDir = getContainingDirectory(XLOG_FILENAME).str();
+const std::string& getTestDir() {
+  static const std::string testDir = [] {
+    auto sourceDir = getContainingDirectory(XLOG_FILENAME).str();
+    if (folly::fs::exists(folly::fs::path(sourceDir) / "certs/ca_cert.pem")) {
+      return sourceDir;
+    }
+    return folly::test::find_resource(
+               "proxygen/httpserver/tests/certs/ca_cert.pem")
+               .parent_path()
+               .parent_path()
+               .string() +
+           "/";
+  }();
+  return testDir;
+}
 } // namespace
 
 class ServerThread {
@@ -283,14 +298,15 @@ class Cb : public folly::AsyncSocket::ConnectCallback {
 wangle::SSLContextConfig getSslContextConfig(bool useMultiCA) {
   wangle::SSLContextConfig sslCfg;
   sslCfg.isDefault = true;
-  sslCfg.setCertificate(
-      kTestDir + "certs/test_cert1.pem", kTestDir + "certs/test_key1.pem", "");
+  sslCfg.setCertificate(getTestDir() + "certs/test_cert1.pem",
+                        getTestDir() + "certs/test_key1.pem",
+                        "");
   if (useMultiCA) {
     sslCfg.clientCAFiles =
-        std::vector<std::string>{kTestDir + "/certs/ca_cert.pem",
-                                 kTestDir + "/certs/client_ca_cert.pem"};
+        std::vector<std::string>{getTestDir() + "/certs/ca_cert.pem",
+                                 getTestDir() + "/certs/client_ca_cert.pem"};
   } else {
-    sslCfg.clientCAFile = kTestDir + "/certs/ca_cert.pem";
+    sslCfg.clientCAFile = getTestDir() + "/certs/ca_cert.pem";
   }
   sslCfg.clientVerification =
       folly::SSLContext::VerifyClientCertificate::IF_PRESENTED;
@@ -424,9 +440,10 @@ setupServer(bool allowInsecureConnectionsOnSecureServer = false,
                            HTTPServer::Protocol::HTTP};
   wangle::SSLContextConfig sslCfg;
   sslCfg.isDefault = true;
-  sslCfg.setCertificate(
-      kTestDir + "certs/test_cert1.pem", kTestDir + "certs/test_key1.pem", "");
-  sslCfg.clientCAFile = kTestDir + "/certs/ca_cert.pem";
+  sslCfg.setCertificate(getTestDir() + "certs/test_cert1.pem",
+                        getTestDir() + "certs/test_key1.pem",
+                        "");
+  sslCfg.clientCAFile = getTestDir() + "/certs/ca_cert.pem";
   sslCfg.clientVerification =
       folly::SSLContext::VerifyClientCertificate::IF_PRESENTED;
   cfg.sslConfigs.push_back(sslCfg);
@@ -724,9 +741,9 @@ TEST(SSL, TestUpdateTLSCredentials) {
                            HTTPServer::Protocol::HTTP};
   wangle::SSLContextConfig sslCfg;
   sslCfg.isDefault = true;
-  copyCreds(kTestDir + "certs/test_cert1.pem",
-            kTestDir + "certs/test_key1.pem");
-  sslCfg.clientCAFile = kTestDir + "/certs/ca_cert.pem";
+  copyCreds(getTestDir() + "certs/test_cert1.pem",
+            getTestDir() + "certs/test_key1.pem");
+  sslCfg.clientCAFile = getTestDir() + "/certs/ca_cert.pem";
   sslCfg.clientVerification =
       folly::SSLContext::VerifyClientCertificate::IF_PRESENTED;
   sslCfg.setCertificate(credFile.path().string(), credFile.path().string(), "");
@@ -769,8 +786,8 @@ TEST(SSL, TestUpdateTLSCredentials) {
   EXPECT_EQ(cert1.length(), SHA256_DIGEST_LENGTH);
 
   // Update cert/key
-  copyCreds(kTestDir + "certs/test_cert2.pem",
-            kTestDir + "certs/test_key2.pem");
+  copyCreds(getTestDir() + "certs/test_cert2.pem",
+            getTestDir() + "certs/test_key2.pem");
   server->updateTLSCredentials();
   evb.loop();
 
@@ -1021,9 +1038,10 @@ TEST_F(ScopedServerTest, StartNotStrictSSL) {
 TEST_F(ScopedServerTest, StartSSLWithInsecure) {
   wangle::SSLContextConfig sslCfg;
   sslCfg.isDefault = true;
-  sslCfg.setCertificate(
-      kTestDir + "certs/test_cert1.pem", kTestDir + "certs/test_key1.pem", "");
-  sslCfg.clientCAFile = kTestDir + "/certs/ca_cert.pem";
+  sslCfg.setCertificate(getTestDir() + "certs/test_cert1.pem",
+                        getTestDir() + "certs/test_key1.pem",
+                        "");
+  sslCfg.clientCAFile = getTestDir() + "/certs/ca_cert.pem";
   sslCfg.clientVerification =
       folly::SSLContext::VerifyClientCertificate::IF_PRESENTED;
   cfg_.sslConfigs.push_back(sslCfg);
@@ -1072,9 +1090,10 @@ class ConnectionFilterTest : public ScopedServerTest {
 TEST_F(ConnectionFilterTest, Test) {
   wangle::SSLContextConfig sslCfg;
   sslCfg.isDefault = true;
-  sslCfg.setCertificate(
-      kTestDir + "certs/test_cert1.pem", kTestDir + "certs/test_key1.pem", "");
-  sslCfg.clientCAFile = kTestDir + "certs/client_ca_cert.pem";
+  sslCfg.setCertificate(getTestDir() + "certs/test_cert1.pem",
+                        getTestDir() + "certs/test_key1.pem",
+                        "");
+  sslCfg.clientCAFile = getTestDir() + "certs/client_ca_cert.pem";
   // Permissive client auth.
   sslCfg.clientVerification =
       folly::SSLContext::VerifyClientCertificate::IF_PRESENTED;
@@ -1083,10 +1102,10 @@ TEST_F(ConnectionFilterTest, Test) {
   auto server = createScopedServer();
   auto insecureClient = connectPlainText();
   auto certlessClient = connectSSL();
-  auto certlessClient2 = connectSSL(kTestDir + "certs/ca_cert.pem");
-  auto secureClient = connectSSL(kTestDir + "certs/ca_cert.pem",
-                                 kTestDir + "certs/client_cert.pem",
-                                 kTestDir + "certs/client_key.pem");
+  auto certlessClient2 = connectSSL(getTestDir() + "certs/ca_cert.pem");
+  auto secureClient = connectSSL(getTestDir() + "certs/ca_cert.pem",
+                                 getTestDir() + "certs/client_cert.pem",
+                                 getTestDir() + "certs/client_key.pem");
 
   // The following clients fail newConnectionFilter.
   EXPECT_EQ(nullptr, insecureClient->getResponse());
