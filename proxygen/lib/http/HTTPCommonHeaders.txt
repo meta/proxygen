@@ -27,7 +27,6 @@ Content-Range
 content-security-policy
 Content-Type
 Cookie
-cross-origin-embedder-policy-report-only
 cross-origin-opener-policy
 cross-origin-resource-policy
 Date
@@ -42,6 +41,7 @@ Keep-Alive
 Last-Modified
 Location
 no-vary-search
+origin-agent-cluster
 permissions-policy
 Pragma
 Priority
