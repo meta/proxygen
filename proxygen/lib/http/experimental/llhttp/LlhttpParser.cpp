@@ -93,10 +93,6 @@ void LlhttpParser::resume() {
   llhttp_resume(&parser_);
 }
 
-void LlhttpParser::resumeAfterUpgrade() {
-  llhttp_resume_after_upgrade(&parser_);
-}
-
 const char* LlhttpParser::errorReason() const {
   return llhttp_get_error_reason(&parser_);
 }

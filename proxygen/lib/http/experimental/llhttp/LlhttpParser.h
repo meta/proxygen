@@ -63,7 +63,6 @@ class LlhttpParser {
 
   void pause();
   void resume();
-  void resumeAfterUpgrade();
   [[nodiscard]] bool isUpgrade() const {
     return parser_.upgrade != 0;
   }

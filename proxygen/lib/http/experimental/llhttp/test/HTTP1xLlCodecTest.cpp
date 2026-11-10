@@ -192,11 +192,11 @@ TEST(HTTP1xLlCodecTest, PipelinedRequestAfterPausedUpgradeRequest) {
   EXPECT_EQ(codec.onIngress(*buffer), upgradeReq.size());
   Mock::VerifyAndClearExpectations(&callbacks);
 
-  EXPECT_CALL(callbacks, onHeadersComplete(2, _));
-  EXPECT_CALL(callbacks, onMessageComplete(2, false));
+  EXPECT_CALL(callbacks, onHeadersComplete(_, _)).Times(0);
   codec.setParserPaused(false);
   buffer->trimStart(upgradeReq.size());
-  EXPECT_EQ(codec.onIngress(*buffer), get.size());
+  EXPECT_EQ(codec.onIngress(*buffer), 0);
+  EXPECT_FALSE(codec.isReusable());
 }
 
 TEST(HTTP1xLlCodecTest, EOFAfterUpgradeRequestIsNotAnError) {
@@ -283,10 +283,10 @@ TEST(HTTP1xLlCodecTest, TestPausedUpgradeRequestCompletesOnNextIngress) {
   Mock::VerifyAndClearExpectations(&callbacks);
 
   EXPECT_CALL(callbacks, onMessageComplete(1, false));
-  EXPECT_CALL(callbacks, onHeadersComplete(2, _));
-  EXPECT_CALL(callbacks, onMessageComplete(2, false));
+  EXPECT_CALL(callbacks, onHeadersComplete(_, _)).Times(0);
   codec.setParserPaused(false);
-  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer(get)), get.size());
+  EXPECT_EQ(codec.onIngress(*folly::IOBuf::copyBuffer(get)), 0);
+  EXPECT_FALSE(codec.isReusable());
 }
 
 // HTTPCoroSession pauses on a WebSocket request and resumes just before writing
@@ -2168,10 +2168,11 @@ TEST(HTTP1xLlCodecTest, WebsocketUpgradeDuplicate) {
 
   auto reqBuf = folly::IOBuf::copyBuffer(
       "GET / HTTP/1.1\r\nConnection: Upgrade\r\nUpgrade:websocket\r\n\r\n");
-  EXPECT_CALL(downStreamCallbacks, onError(_, _, _)).Times(1);
+  EXPECT_CALL(downStreamCallbacks, onError(_, _, _)).Times(0);
 
-  EXPECT_NO_THROW(downstreamCodec.onIngress(*reqBuf));
-  EXPECT_NO_THROW(downstreamCodec.onIngress(*reqBuf));
+  EXPECT_EQ(downstreamCodec.onIngress(*reqBuf), reqBuf->length());
+  EXPECT_EQ(downstreamCodec.onIngress(*reqBuf), 0);
+  EXPECT_FALSE(downstreamCodec.isReusable());
 }
 
 TEST(HTTP1xLlCodecTest, UpgradeAccepted) {

@@ -123,7 +123,6 @@ void HTTP1xLlCodec::setParserPaused(bool paused) {
     parser_->pause();
   } else {
     parser_->resume();
-    resumeDeclinedUpgrade();
   }
 }
 
@@ -143,13 +142,6 @@ void HTTP1xLlCodec::flushPendingIngress() {
   parser_->runPendingIngress();
   if (isParserPaused()) {
     parser_->pause();
-  }
-}
-
-void HTTP1xLlCodec::resumeDeclinedUpgrade() {
-  if (parser_->error() == HPE_PAUSED_UPGRADE && !isParseStateUpgraded() &&
-      !isParserPaused()) {
-    parser_->resumeAfterUpgrade();
   }
 }
 
@@ -211,7 +203,6 @@ size_t HTTP1xLlCodec::onIngressImpl(const folly::IOBuf& buf) {
     if (!isUpgradePending()) {
       flushPendingIngress();
     }
-    resumeDeclinedUpgrade();
     if (isParserError()) {
       onParserError();
     }
@@ -236,7 +227,6 @@ void HTTP1xLlCodec::onIngressEOF() {
     return;
   }
   flushPendingIngress();
-  resumeDeclinedUpgrade();
   if (isParserError()) {
     onParserError();
     return;
