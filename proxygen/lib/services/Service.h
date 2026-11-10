@@ -67,6 +67,14 @@ class Service {
   }
 
   /**
+   * Whether proxygen's main thread keeps CAP_BPF effective after dropping
+   * privileges, for a service that creates BPF maps once it serves.
+   */
+  [[nodiscard]] virtual bool keepsBpfCapabilityAfterDroppingPrivileges() const {
+    return false;
+  }
+
+  /**
    * Mark the service as about to stop; invoked from main thread.
    *
    * This indicates that the service will be told to stop at some later time
