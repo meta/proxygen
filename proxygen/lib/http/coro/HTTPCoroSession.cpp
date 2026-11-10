@@ -3920,6 +3920,18 @@ folly::coro::Task<HTTPCoroSession::WtReqResult> HTTPCoroSession::sendWtReq(
     RequestReservation reservation,
     const HTTPMessage& msg,
     std::unique_ptr<WebTransportHandler> wtHandler) noexcept {
+  return sendWtReq(std::move(reservation),
+                   msg,
+                   [wtHandler = std::move(wtHandler)](
+                       const HTTPMessage&) mutable -> WebTransportHandler::Ptr {
+                     return std::move(wtHandler);
+                   });
+}
+
+folly::coro::Task<HTTPCoroSession::WtReqResult> HTTPCoroSession::sendWtReq(
+    RequestReservation reservation,
+    const HTTPMessage& msg,
+    WtHandlerFactory wtHandlerFactory) noexcept {
   if (!reservation.fromSession(this)) {
     co_yield co_error(makeInternalEx("Invalid reservation"));
   }
@@ -3964,6 +3976,12 @@ folly::coro::Task<HTTPCoroSession::WtReqResult> HTTPCoroSession::sendWtReq(
     co_return result;
   }
 
+  auto wtHandler = wtHandlerFactory(*result.resp);
+  if (!wtHandler) {
+    XLOG(DBG4) << __func__
+               << " handler factory rejected the WebTransport; sess=" << *this;
+    co_return result;
+  }
   result.wt = createWebTransport(*connectStreamId,
                                  egressSource.release(),
                                  std::move(ingressSource),

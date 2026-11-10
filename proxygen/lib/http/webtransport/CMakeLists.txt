@@ -35,6 +35,12 @@ proxygen_add_library(proxygen_http_webtransport_httpwebtransport
 
 proxygen_add_library(proxygen_http_webtransport_flow_controller)
 
+proxygen_add_library(proxygen_http_webtransport_shared_handler
+  EXPORTED_DEPS
+    proxygen_http_webtransport
+    Folly::folly_function
+)
+
 proxygen_add_library(proxygen_http_webtransport_webtransportimpl
   SRCS
     WebTransportImpl.cpp

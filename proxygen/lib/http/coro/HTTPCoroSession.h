@@ -18,6 +18,7 @@
 #include "proxygen/lib/http/coro/util/DetachableExecutor.h"
 #include "proxygen/lib/http/coro/util/Refcount.h"
 #include "proxygen/lib/http/coro/util/WindowContainer.h"
+#include <folly/Function.h>
 #include <folly/container/EvictingCacheMap.h>
 #include <folly/container/F14Map.h>
 #include <folly/coro/AsyncScope.h>
@@ -375,6 +376,19 @@ class HTTPCoroSession
       RequestReservation reservation,
       const HTTPMessage& msg,
       std::unique_ptr<WebTransportHandler> wtHandler) noexcept;
+
+  /**
+   * Called with the 2xx response; returns the handler for the WebTransport, or
+   * null to reject it, which aborts the CONNECT stream and leaves the result
+   * without a WebTransport. The handler's onWebTransportSession runs before
+   * sendWtReq returns.
+   */
+  using WtHandlerFactory = folly::Function<std::unique_ptr<WebTransportHandler>(
+      const HTTPMessage& resp)>;
+  folly::coro::Task<WtReqResult> sendWtReq(
+      RequestReservation reservation,
+      const HTTPMessage& msg,
+      WtHandlerFactory wtHandlerFactory) noexcept;
 
   void describe(std::ostream& os) const override;
 
