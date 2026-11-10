@@ -3467,7 +3467,9 @@ void HQSession::deliverWTStream(HQStreamTransportBase* connectStream,
                                 quic::StreamId streamID) {
   DCHECK(connectStream);
   if (connectStream->wtSess_) {
-    if (!connectStream->wtSess_->acquireIngressStream(streamID)) {
+    if (connectStream->wtSess_->acquireIngressStream(streamID)) {
+      sock_->setPeekCallback(streamID, nullptr);
+    } else {
       rejectStream(streamID);
     }
     return;
@@ -3487,13 +3489,13 @@ void HQSession::deliverWTStream(HQStreamTransportBase* connectStream,
   if (readHandle && readHandle->readCallbackRegistered()) {
     sock_->setReadCallback(streamID, readHandle);
   }
+  sock_->setPeekCallback(streamID, nullptr);
 }
 
 // Peer initiated Uni WT streams
 void HQSession::dispatchUniWTStream(quic::StreamId streamID,
                                     quic::StreamId sessionID,
                                     size_t toConsume) {
-  sock_->setPeekCallback(streamID, nullptr);
   auto consumeRes = sock_->consume(streamID, toConsume);
   CHECK(!consumeRes.hasError()) << "Unexpected error consuming bytes";
   VLOG(6) << __func__ << " sess=" << *this << " id=" << streamID
@@ -3510,7 +3512,6 @@ void HQSession::dispatchUniWTStream(quic::StreamId streamID,
 void HQSession::dispatchBidiWTStream(HTTPCodec::StreamID streamID,
                                      HTTPCodec::StreamID sessionID,
                                      size_t toConsume) {
-  sock_->setPeekCallback(streamID, nullptr);
   auto consumeRes = sock_->consume(streamID, toConsume);
   CHECK(!consumeRes.hasError()) << "Unexpected error consuming bytes";
   VLOG(6) << __func__ << " sess=" << *this << " id=" << streamID
@@ -3529,6 +3530,8 @@ void HQSession::PendingWTSession::timeoutExpired() noexcept {
 
 void HQSession::bufferPendingWTStream(quic::StreamId sessionID,
                                       quic::StreamId streamID) {
+  // The dispatcher stays the peek callback until delivery, so that the
+  // transport keeps the stream along with any FIN or reset.
   auto [it, inserted] = pendingWTStreams_.try_emplace(sessionID);
   if (inserted) {
     it->second = std::make_unique<PendingWTSession>(*this, sessionID);

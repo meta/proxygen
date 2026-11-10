@@ -3957,12 +3957,18 @@ namespace {
 // queue it on the mock socket driver for the given stream id.
 void queuePeerWTUniStream(MockQuicSocketDriver* driver,
                           quic::StreamId wtStreamId,
-                          quic::StreamId sessionId) {
+                          quic::StreamId sessionId,
+                          std::unique_ptr<folly::IOBuf> payload = nullptr,
+                          bool eof = false) {
   folly::IOBufQueue buf{folly::IOBufQueue::cacheChainLength()};
   generateStreamPreface(buf, hq::UnidirectionalStreamType::WEBTRANSPORT);
   folly::io::QueueAppender appender(&buf, 8);
   encodeQuicIntegerWithAtLeast(sessionId, 1, appender);
-  driver->addReadEvent(wtStreamId, buf.move(), std::chrono::milliseconds(0));
+  if (payload) {
+    buf.append(std::move(payload));
+  }
+  driver->addReadEvent(
+      wtStreamId, buf.move(), eof, std::chrono::milliseconds(0));
 }
 } // namespace
 
@@ -4002,6 +4008,101 @@ TEST_P(HQDownstreamSessionTestWebTransport, BufferedWTUniStreamDelivered) {
   // Buffered stream delivered to the DummyWtHandler via wtSess_ acquisition.
   EXPECT_EQ(wtCtx->peerStreams.size(), 1);
   EXPECT_FALSE(socketDriver_->streams_[wtStreamId].error.has_value());
+
+  socketDriver_->addReadEOF(sessionId, std::chrono::milliseconds(0));
+  hqSession_->closeWhenIdle();
+  flushRequestsAndLoop();
+}
+
+// The transport discards a closed stream once its peek and read callbacks are
+// unset. A buffered stream that already has its FIN, or a reset, must survive
+// until it is delivered after the 200.
+TEST_P(HQDownstreamSessionTestWebTransport, BufferedWTUniStreamKeepsFin) {
+  const quic::StreamId sessionId = 0;
+  const quic::StreamId wtStreamId = 14;
+  constexpr size_t kPayloadLen = 10;
+  socketDriver_->setReapClosedStreams(true);
+
+  sendSettings();
+  queuePeerWTUniStream(socketDriver_.get(),
+                       wtStreamId,
+                       sessionId,
+                       makeBuf(kPayloadLen),
+                       /*eof=*/true);
+  flushRequestsAndLoopN(1);
+
+  HTTPMessage req;
+  req.setHTTPVersion(1, 1);
+  req.setUpgradeProtocol("webtransport");
+  req.setMethod(HTTPMethod::CONNECT);
+  req.setURL("/webtransport");
+  req.getHeaders().set(HTTP_HEADER_HOST, "www.facebook.com");
+  ASSERT_EQ(sendRequest(req, /*eom=*/false), sessionId);
+
+  auto wtHandler = proxygen::test::DummyWtHandler::make();
+  auto wtCtx = wtHandler->ctx;
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&]() {
+    HTTPMessage resp;
+    resp.setStatusCode(200);
+    handler->txn_->sendWtHeaders(resp, std::move(wtHandler));
+  });
+  handler->expectDetachTransaction();
+  flushRequestsAndLoopN(3);
+
+  ASSERT_EQ(wtCtx->peerStreams.size(), 1);
+  auto read = wtCtx->peerStreams[0].readHandle->readStreamData();
+  flushRequestsAndLoopN(1);
+  ASSERT_TRUE(read.isReady());
+  EXPECT_EQ(read.value().data->computeChainDataLength(), kPayloadLen);
+  EXPECT_TRUE(read.value().fin);
+
+  socketDriver_->addReadEOF(sessionId, std::chrono::milliseconds(0));
+  hqSession_->closeWhenIdle();
+  flushRequestsAndLoop();
+}
+
+TEST_P(HQDownstreamSessionTestWebTransport, BufferedWTUniStreamKeepsReset) {
+  const quic::StreamId sessionId = 0;
+  const quic::StreamId wtStreamId = 14;
+  socketDriver_->setReapClosedStreams(true);
+
+  sendSettings();
+  queuePeerWTUniStream(socketDriver_.get(), wtStreamId, sessionId);
+  flushRequestsAndLoopN(1);
+  socketDriver_->addReadError(wtStreamId, WebTransport::toHTTPErrorCode(77));
+  flushRequestsAndLoopN(1);
+
+  HTTPMessage req;
+  req.setHTTPVersion(1, 1);
+  req.setUpgradeProtocol("webtransport");
+  req.setMethod(HTTPMethod::CONNECT);
+  req.setURL("/webtransport");
+  req.getHeaders().set(HTTP_HEADER_HOST, "www.facebook.com");
+  ASSERT_EQ(sendRequest(req, /*eom=*/false), sessionId);
+
+  // the read handle is freed once the reset is delivered, so read right away
+  auto wtHandler =
+      std::make_unique<NiceMock<proxygen::test::MockWebTransportHandler>>();
+  folly::Optional<folly::SemiFuture<WebTransport::StreamData>> read;
+  EXPECT_CALL(*wtHandler, onNewUniStream(_))
+      .WillOnce([&](WebTransport::StreamReadHandle* readHandle) {
+        read.emplace(readHandle->readStreamData());
+      });
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&]() {
+    HTTPMessage resp;
+    resp.setStatusCode(200);
+    handler->txn_->sendWtHeaders(resp, std::move(wtHandler));
+  });
+  handler->expectDetachTransaction();
+  flushRequestsAndLoopN(3);
+
+  ASSERT_TRUE(read.has_value());
+  ASSERT_TRUE(read->isReady());
+  ASSERT_TRUE(read->hasException());
+  EXPECT_TRUE(
+      read->result().exception().is_compatible_with<WebTransport::Exception>());
 
   socketDriver_->addReadEOF(sessionId, std::chrono::milliseconds(0));
   hqSession_->closeWhenIdle();

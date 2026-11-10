@@ -49,7 +49,7 @@ void HQStreamDispatcherBase::onDataAvailable(
   }
 
   auto& peekFirst = peekData.front();
-  // if not at offset 0, ignore
+  // a stream past offset 0 has already been dispatched, e.g. a held WT stream
   if (peekFirst.offset != 0) {
     return;
   }

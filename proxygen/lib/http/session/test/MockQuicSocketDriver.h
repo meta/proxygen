@@ -108,6 +108,7 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
     uint64_t numWriteChainInvocations{0};
     folly::Optional<uint64_t> reliableResetCheckpoint;
     folly::Optional<uint64_t> reliableSize;
+    folly::Optional<QuicErrorCode> undeliveredReadError;
   };
 
  public:
@@ -274,6 +275,23 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
               if (cb == nullptr && error.has_value()) {
                 stream.error = error.value();
               }
+              if (cb && stream.undeliveredReadError) {
+                // mvfst delivers a stored read error to a later read callback
+                eventBase_->runInLoop([this, id, deleted = deleted_] {
+                  if (*deleted) {
+                    return;
+                  }
+                  auto it = streams_.find(id);
+                  if (it == streams_.end() || !it->second.readCB ||
+                      !it->second.undeliveredReadError) {
+                    return;
+                  }
+                  auto err = *std::exchange(it->second.undeliveredReadError,
+                                            folly::none);
+                  it->second.readCB->readError(id, QuicError(err));
+                });
+                return {};
+              }
               if (cb && stream.readState == NEW) {
                 stream.readState = OPEN;
               } else if (cb && stream.readState == OPEN) {
@@ -359,7 +377,9 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
             [this](StreamId id,
                    size_t amount) -> quic::Expected<void, LocalErrorCode> {
               auto& stream = streams_[id];
-              stream.readBuf.splitAtMost(amount);
+              auto consumed = stream.readBuf.splitAtMost(amount);
+              stream.readOffset +=
+                  consumed ? consumed->computeChainDataLength() : 0;
               return {};
             }));
 
@@ -1566,10 +1586,33 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
                 stream.readCB->readAvailable(event.streamId);
                 eventBase_->runInLoop(this);
               } // else if PAUSED, no-op
+            } else if (event.error && reapClosedStreams_) {
+              stream.undeliveredReadError = *event.error;
+              stream.readState = ERROR;
+            }
+          }
+          if (reapClosedStreams_) {
+            for (auto& event : events) {
+              maybeReapStream(event.streamId);
             }
           }
         },
         cumulativeDelay_.count());
+  }
+
+  // mvfst discards a peer uni stream that has its FIN or a reset, along with
+  // any unread data, once its read and peek callbacks are both unset
+  void maybeReapStream(StreamId id) {
+    auto it = streams_.find(id);
+    if (it == streams_.end() || !isPeerStream(id) ||
+        !sock_->isUnidirectionalStream(id)) {
+      return;
+    }
+    auto& stream = it->second;
+    if (!stream.readCB && !stream.peekCB &&
+        (stream.readEOF || stream.readState == ERROR)) {
+      streams_.erase(it);
+    }
   }
 
   bool isPeerStream(quic::StreamId id) {
@@ -1755,11 +1798,17 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
     strictErrorCheck_ = strict;
   }
 
+  // see maybeReapStream
+  void setReapClosedStreams(bool reap) {
+    reapClosedStreams_ = reap;
+  }
+
   uint64_t getNumWriteChainInvocations(StreamId id) {
     return streams_[id].numWriteChainInvocations;
   }
 
   bool strictErrorCheck_{true};
+  bool reapClosedStreams_{false};
   bool reliableResetSupported_{false};
   folly::EventBase* eventBase_;
   std::shared_ptr<quic::FollyQuicEventBase> quicEventBase_;
