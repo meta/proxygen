@@ -519,7 +519,6 @@ void WebTransportImpl::StreamReadHandle::readAvailable(
     readError(id,
               quic::QuicError(quic::LocalErrorCode::INTERNAL_ERROR,
                               "sync read error"));
-    impl.closeIngressStream(id);
     return;
   }
   quic::BufPtr data = std::move(readRes.value().first);

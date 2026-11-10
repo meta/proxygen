@@ -379,6 +379,46 @@ TEST_F(HTTPTransactionWebTransportTest, ReadStreamError) {
   EXPECT_TRUE(fut.isReady());
 }
 
+TEST_F(HTTPTransactionWebTransportTest, ReadStreamSyncError) {
+  WebTransport::StreamReadHandle* readHandle{nullptr};
+  EXPECT_CALL(handler_, onWebTransportUniStream(_, _))
+      .WillOnce(SaveArg<1>(&readHandle));
+  auto implHandle = txn_->onWebTransportUniStream(2);
+
+  auto fut = readHandle->readStreamData()
+                 .via(&eventBase_)
+                 .thenTry([](auto streamData) {
+                   readCallback(std::move(streamData), true, 0, false);
+                 });
+  EXPECT_CALL(transport_, readWebTransportData(2, 65535))
+      .WillOnce(Return(
+          folly::makeUnexpected(WebTransport::ErrorCode::GENERIC_ERROR)));
+  implHandle->readAvailable(2);
+  eventBase_.loopOnce();
+  EXPECT_TRUE(fut.isReady());
+}
+
+TEST_F(HTTPTransactionWebTransportTest, ReadStreamSyncErrorNoRead) {
+  WebTransport::StreamReadHandle* readHandle{nullptr};
+  EXPECT_CALL(handler_, onWebTransportUniStream(_, _))
+      .WillOnce(SaveArg<1>(&readHandle));
+  auto implHandle = txn_->onWebTransportUniStream(2);
+
+  EXPECT_CALL(transport_, readWebTransportData(2, 65535))
+      .WillOnce(Return(
+          folly::makeUnexpected(WebTransport::ErrorCode::GENERIC_ERROR)));
+  implHandle->readAvailable(2);
+
+  // the error waits for the next read
+  auto fut = readHandle->readStreamData()
+                 .via(&eventBase_)
+                 .thenTry([](auto streamData) {
+                   readCallback(std::move(streamData), true, 0, false);
+                 });
+  eventBase_.loopOnce();
+  EXPECT_TRUE(fut.isReady());
+}
+
 TEST_F(HTTPTransactionWebTransportTest, ReadStreamCancel) {
   auto wtImpl = dynamic_cast<WebTransportImpl*>(wt_);
   ASSERT_NE(wtImpl, nullptr);
