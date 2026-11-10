@@ -64,20 +64,21 @@ TEST(WebTransportTest, AwaitNextReadTimeout) {
   auto [promise, future] =
       folly::makePromiseContract<WebTransport::StreamData>();
   EXPECT_CALL(readHandle, readStreamData())
-      .WillOnce(testing::Invoke([&, &future = future] { //
-        return std::move(future);
+      .WillOnce(testing::Invoke([&, &readFuture = future] { //
+        return std::move(readFuture);
       }));
 
   readHandle.awaitNextRead(
       &evb,
-      [&, &promise = promise](WebTransport::StreamReadHandle* handle,
-                              uint64_t,
-                              folly::Try<WebTransport::StreamData> streamData) {
+      [&, &readPromise = promise](
+          WebTransport::StreamReadHandle* handle,
+          uint64_t,
+          folly::Try<WebTransport::StreamData> streamData) {
         EXPECT_EQ(handle, nullptr);
         EXPECT_NE(streamData.tryGetExceptionObject<folly::FutureException>(),
                   nullptr);
         // The promise core holds a keep alive to the event base, kill it here
-        auto deadPromise = std::move(promise);
+        auto deadPromise = std::move(readPromise);
       },
       std::chrono::milliseconds(100));
   evb.loop();
