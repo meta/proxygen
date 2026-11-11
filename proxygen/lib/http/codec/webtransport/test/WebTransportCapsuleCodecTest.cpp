@@ -83,14 +83,16 @@ class WebTransportCapsuleCodecTest : public Test {
   // Simulate PARSE_UNDERFLOW by modifying buf to signify 8-byte varint. For all
   // tests, the first payload byte will be the fifth byte due to all types being
   // 4 bytes and the length being 1 byte.
-  void testParseUnderflow(CapsuleCodec::ErrorCode err, CodecVersion version) {
+  void testParseUnderflow(CapsuleCodec::ErrorCode err,
+                          CodecVersion version,
+                          bool eom = true) {
     auto buf = queue_.move();
     buf->writableData()[5] = 0xFF;
     EXPECT_CALL(callback_, onConnectionError(_))
         .WillOnce(Invoke([&](auto errorCode) { EXPECT_EQ(errorCode, err); }));
     auto codec = (version == CodecVersion::H2) ? std::move(h2_codec_)
                                                : std::move(h3_codec_);
-    codec->onIngress(std::move(buf), true);
+    codec->onIngress(std::move(buf), eom);
   }
 
   std::unique_ptr<WebTransportCapsuleCodec> h2_codec_;
@@ -562,4 +564,53 @@ TEST_F(WebTransportCapsuleCodecTest, H3OnDrainWebTransportSessionCapsule) {
   EXPECT_CALL(callback_, onDrainSession(_));
   EXPECT_CALL(callback_, onConnectionError(_)).Times(0);
   h3_codec_->onIngress(std::move(buf), true);
+}
+
+// A capsule too short for its contents fails before the stream ends.
+TEST_F(WebTransportCapsuleCodecTest, CapsuleTooShortForContentsFailsBeforeEOM) {
+  writeWTMaxData(queue_, WTMaxDataCapsule{100});
+  testParseUnderflow(CapsuleCodec::ErrorCode::PARSE_UNDERFLOW,
+                     CodecVersion::H3,
+                     /*eom=*/false);
+}
+
+TEST_F(WebTransportCapsuleCodecTest, EmptyCapsuleFailsBeforeEOM) {
+  for (auto version : {CodecVersion::H2, CodecVersion::H3}) {
+    writeWTMaxData(queue_, WTMaxDataCapsule{100});
+    writeCloseWebTransportSession(
+        queue_,
+        CloseWebTransportSessionCapsule{.applicationErrorCode = 500,
+                                        .applicationErrorMessage = "BAD!"});
+    auto buf = queue_.move();
+    buf->coalesce();
+    // set the WT_MAX_DATA's length, after its 4-byte type, to 0
+    buf->writableData()[4] = 0;
+    EXPECT_CALL(callback_, onMaxData(_)).Times(0);
+    EXPECT_CALL(callback_, onCloseSession(_)).Times(0);
+    EXPECT_CALL(callback_,
+                onConnectionError(CapsuleCodec::ErrorCode::PARSE_UNDERFLOW));
+    auto& codec = (version == CodecVersion::H2) ? h2_codec_ : h3_codec_;
+    codec->onIngress(std::move(buf), false);
+    Mock::VerifyAndClearExpectations(&callback_);
+  }
+}
+
+TEST_F(WebTransportCapsuleCodecTest, SplitCapsuleWaitsForTheRest) {
+  writeWTMaxData(queue_, WTMaxDataCapsule{100});
+  auto buf = queue_.move();
+  buf->coalesce();
+  // A byte at a time splits the type, the length and the payload.
+  EXPECT_CALL(callback_, onMaxData(_)).Times(0);
+  EXPECT_CALL(callback_, onConnectionError(_)).Times(0);
+  for (size_t i = 0; i + 1 < buf->length(); i++) {
+    h3_codec_->onIngress(folly::IOBuf::copyBuffer(buf->data() + i, 1), false);
+  }
+  Mock::VerifyAndClearExpectations(&callback_);
+
+  EXPECT_CALL(callback_, onMaxData(_)).WillOnce([&](WTMaxDataCapsule capsule) {
+    EXPECT_EQ(capsule.maximumData, 100);
+  });
+  EXPECT_CALL(callback_, onConnectionError(_)).Times(0);
+  h3_codec_->onIngress(
+      folly::IOBuf::copyBuffer(buf->data() + buf->length() - 1, 1), false);
 }

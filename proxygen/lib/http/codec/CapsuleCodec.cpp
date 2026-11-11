@@ -16,12 +16,15 @@ void CapsuleCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
   ingress_.append(std::move(data));
   size_t remainingLength = ingress_.chainLength();
   folly::io::Cursor cursor(ingress_.front());
+  // Only a capsule cut off by the end of the buffer can be completed later.
+  bool needMoreData = false;
   while (!connError_ && remainingLength > 0) {
     switch (parseState_) {
       case ParseState::CAPSULE_HEADER_TYPE: {
         auto type = quic::follyutils::decodeQuicInteger(cursor);
         if (!type) {
           connError_ = ErrorCode::PARSE_UNDERFLOW;
+          needMoreData = true;
           break;
         }
         curCapsuleType_ = type->first;
@@ -33,6 +36,7 @@ void CapsuleCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
         auto length = quic::follyutils::decodeQuicInteger(cursor);
         if (!length) {
           connError_ = ErrorCode::PARSE_UNDERFLOW;
+          needMoreData = true;
           break;
         }
         curCapsuleLength_ = length->first;
@@ -51,6 +55,7 @@ void CapsuleCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
       case ParseState::CAPSULE_PAYLOAD: {
         if (remainingLength < curCapsuleLength_) {
           connError_ = ErrorCode::PARSE_UNDERFLOW;
+          needMoreData = true;
           break;
         }
         auto prevPos = cursor.getCurrentPosition();
@@ -79,7 +84,7 @@ void CapsuleCodec::onIngress(std::unique_ptr<folly::IOBuf> data, bool eom) {
     }
   }
   if (connError_) {
-    if (connError_.value() == ErrorCode::PARSE_UNDERFLOW && !eom) {
+    if (needMoreData && !eom) {
       ingress_.trimStart(ingress_.chainLength() - remainingLength);
       connError_.reset();
       return;
