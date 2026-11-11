@@ -149,6 +149,9 @@ class HTTPTunnelSink
   void setEgressRateLimit(uint64_t) override {
   }
 
+  void setEgressRateDemotion(uint64_t, HTTPPriority) override {
+  }
+
   void timeoutExpired() noexcept override;
 
   void setIdleTimeout(std::chrono::milliseconds timeout) override;

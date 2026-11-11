@@ -183,6 +183,7 @@ proxygen_add_library(proxygen_http_session_http_transaction
     Folly::folly_lang_assume
     Folly::folly_network_address
     Folly::folly_optional
+    Folly::folly_token_bucket
 )
 
 proxygen_add_library(proxygen_http_session_http_upstream_session

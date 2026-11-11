@@ -55,6 +55,7 @@ class MockHTTPTransactionTransport : public HTTPTransaction::Transport {
   }
 
   MOCK_METHOD((HTTPSessionBase*), getHTTPSessionBase, (), ());
+  MOCK_METHOD(folly::EventBase*, getEventBase, (), (const, override));
   MOCK_METHOD((size_t),
               sendChunkHeader,
               (HTTPTransaction*, size_t),

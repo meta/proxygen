@@ -159,6 +159,10 @@ class HTTPTransactionSink : public HTTPSink {
   void setEgressRateLimit(uint64_t bitsPerSecond) override {
     httpTransaction_->setEgressRateLimit(bitsPerSecond);
   }
+  void setEgressRateDemotion(uint64_t bitsPerSecond,
+                             HTTPPriority demotedPriority) override {
+    httpTransaction_->setEgressRateDemotion(bitsPerSecond, demotedPriority);
+  }
   // Client timeout
   void timeoutExpired() override {
     httpTransaction_->timeoutExpired();

@@ -98,6 +98,58 @@ class HTTPTransactionObservabilityTest : public ::testing::Test {
   std::unique_ptr<HTTPTransaction> txn_;
 };
 
+TEST_F(HTTPTransactionObservabilityTest,
+       RateDemotionRefillUsesTransportEventBase) {
+  folly::EventBase timerEvb;
+  txn_.reset();
+  txn_ = std::make_unique<HTTPTransaction>(TransportDirection::DOWNSTREAM,
+                                           HTTPCodec::StreamID(1),
+                                           0,
+                                           transport_,
+                                           txnEgressQueue_,
+                                           &timerEvb.timer());
+
+  const HTTPPriority originalPriority(1, true);
+  EXPECT_CALL(transport_, getHTTPPriority())
+      .WillRepeatedly(Return(folly::Optional<HTTPPriority>(originalPriority)));
+  EXPECT_CALL(transport_, getEventBase()).WillOnce(Return(&evb_));
+  EXPECT_CALL(transport_, notifyPendingEgress()).Times(AnyNumber());
+  EXPECT_CALL(transport_, notifyEgressBodyBuffered(_)).Times(AnyNumber());
+  EXPECT_CALL(transport_, sendHeaders(txn_.get(), _, _, false));
+  EXPECT_CALL(transport_, sendBody(txn_.get(), _, false, _))
+      .WillOnce(
+          [](HTTPTransaction*, std::shared_ptr<folly::IOBuf> body, bool, bool) {
+            return HTTPTransaction::Transport::SendBodyResult{
+                .encodedSize = body->computeChainDataLength(),
+                .bodyByteStreamRange = folly::none};
+          });
+
+  bool restored = false;
+  {
+    InSequence changes;
+    EXPECT_CALL(transport_, changePriority(txn_.get(), HTTPPriority(7, true)));
+    EXPECT_CALL(transport_, changePriority(txn_.get(), originalPriority))
+        .WillOnce([&](HTTPTransaction*, HTTPPriority) {
+          restored = true;
+          return size_t{0};
+        });
+  }
+
+  txn_->setEgressRateDemotion(11200, HTTPPriority(7, true));
+  HTTPMessage response;
+  response.setStatusCode(200);
+  txn_->sendHeaders(response);
+  txn_->sendBody(folly::IOBuf::copyBuffer(std::string(1400, 'x')));
+  txn_->onWriteReady(1400, 1.0);
+
+  evb_.loop();
+  EXPECT_TRUE(restored);
+
+  EXPECT_CALL(transport_, detach(txn_.get())).WillOnce([&] { txn_.reset(); });
+  EXPECT_CALL(transport_, sendAbort(txn_.get(), _));
+  txn_->sendAbort();
+}
+
 TEST_F(HTTPTransactionObservabilityTest, ObserverAttachedDetached) {
   MockHTTPTransactionObserver::EventSet eventSet;
   auto observer = addMockTxnObserver(eventSet);

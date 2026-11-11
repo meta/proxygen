@@ -89,6 +89,8 @@ class HTTPSink {
   [[nodiscard]] virtual bool isIngressPaused() const = 0;
   [[nodiscard]] virtual bool isEgressPaused() const = 0;
   virtual void setEgressRateLimit(uint64_t bitsPerSecond) = 0;
+  virtual void setEgressRateDemotion(uint64_t bitsPerSecond,
+                                     HTTPPriority demotedPriority) = 0;
   // Client timeout
   virtual void timeoutExpired() = 0;
   virtual void setIdleTimeout(std::chrono::milliseconds timeout) = 0;

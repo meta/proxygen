@@ -637,6 +637,196 @@ TEST_P(HQDownstreamSessionTest, HttpRateLimitNormal) {
   hqSession_->closeWhenIdle();
 }
 
+TEST_P(HQDownstreamSessionTest, RateDemotionDemotesWithoutPausing) {
+  constexpr uint32_t kResponseLength = 10000;
+  constexpr uint64_t kRateBitsPerSecond = 8;
+  const auto originalPriority = Priority(1, true);
+  const auto demotedPriority = Priority(7, true);
+
+  socketDriver_->getSocket()->setConnectionFlowControlWindow(
+      static_cast<uint64_t>(kResponseLength) * 2);
+  const auto id = sendRequest();
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&] {
+    EXPECT_CALL(*socketDriver_->getSocket(), getStreamPriority(id))
+        .WillRepeatedly(Return(originalPriority));
+    handler->txn_->setEgressRateDemotion(kRateBitsPerSecond,
+                                         HTTPPriority(7, true));
+  });
+  handler->expectEOM([&] {
+    socketDriver_->expectSetPriority(id, demotedPriority);
+    handler->sendHeaders(200, kResponseLength);
+    handler->sendBody(kResponseLength);
+  });
+  EXPECT_CALL(*handler, _onEgressPaused()).Times(0);
+
+  flushRequestsAndLoopN(1);
+
+  socketDriver_->expectSetPriority(id, originalPriority);
+  handler->txn_->setEgressRateDemotion(0, HTTPPriority(7, true));
+  handler->txn_->sendEOM();
+  handler->expectDetachTransaction();
+  flushRequestsAndLoop();
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTest, RateDemotionRefillRestoresPriority) {
+  constexpr uint32_t kResponseLength = 10000;
+  constexpr uint64_t kRateBitsPerSecond = 112000;
+  const auto originalPriority = Priority(1, true);
+  const auto demotedPriority = Priority(7, true);
+
+  socketDriver_->getSocket()->setConnectionFlowControlWindow(
+      static_cast<uint64_t>(kResponseLength) * 2);
+  const auto id = sendRequest();
+  {
+    InSequence priorityChanges;
+    socketDriver_->expectSetPriority(id, demotedPriority);
+    socketDriver_->expectSetPriority(id, originalPriority);
+  }
+
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&] {
+    EXPECT_CALL(*socketDriver_->getSocket(), getStreamPriority(id))
+        .WillRepeatedly(Return(originalPriority));
+    handler->txn_->setEgressRateDemotion(kRateBitsPerSecond,
+                                         HTTPPriority(7, true));
+  });
+  handler->expectEOM([&] {
+    handler->sendHeaders(200, kResponseLength);
+    handler->sendBody(kResponseLength);
+  });
+  EXPECT_CALL(*handler, _onEgressPaused()).Times(0);
+
+  flushRequestsAndLoop();
+
+  handler->txn_->sendEOM();
+  handler->expectDetachTransaction();
+  flushRequestsAndLoop();
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTest, RateDemotionBucketScalesWithRate) {
+  constexpr uint32_t kResponseLength = 10000;
+  constexpr uint64_t kRateBitsPerSecond = 16000000;
+  const auto originalPriority = Priority(1, true);
+
+  socketDriver_->getSocket()->setConnectionFlowControlWindow(
+      static_cast<uint64_t>(kResponseLength) * 2);
+  const auto id = sendRequest();
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&] {
+    EXPECT_CALL(*socketDriver_->getSocket(), getStreamPriority(id))
+        .WillRepeatedly(Return(originalPriority));
+    handler->txn_->setEgressRateDemotion(kRateBitsPerSecond,
+                                         HTTPPriority(7, true));
+  });
+  handler->expectEOM([&] {
+    EXPECT_CALL(*socketDriver_->getSocket(), setStreamPriority(id, _)).Times(0);
+    handler->sendHeaders(200, kResponseLength);
+    handler->sendBody(kResponseLength);
+  });
+
+  flushRequestsAndLoop();
+
+  handler->txn_->sendEOM();
+  handler->expectDetachTransaction();
+  flushRequestsAndLoop();
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTest, RateDemotionDemotedWritesConsumeCredit) {
+  constexpr uint32_t kChunkLength = 1400;
+  const auto originalPriority = Priority(1, true);
+  auto lastBodyWrite = std::chrono::steady_clock::time_point{};
+
+  socketDriver_->getSocket()->setConnectionFlowControlWindow(
+      static_cast<uint64_t>(kChunkLength) * 4);
+  const auto id = sendRequest();
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&] {
+    EXPECT_CALL(*socketDriver_->getSocket(), getStreamPriority(id))
+        .WillRepeatedly(Return(originalPriority));
+    handler->txn_->setEgressRateDemotion(2800, HTTPPriority(7, true));
+  });
+  {
+    InSequence changes;
+    socketDriver_->expectSetPriority(id, Priority(7, true));
+    EXPECT_CALL(*socketDriver_->getSocket(), setStreamPriority(id, _))
+        .WillOnce([&](StreamId, const PriorityQueue::Priority& priority)
+                      -> quic::Expected<void, quic::LocalErrorCode> {
+          EXPECT_EQ(Priority(priority), originalPriority);
+          EXPECT_NE(lastBodyWrite, std::chrono::steady_clock::time_point{});
+          EXPECT_GE(std::chrono::steady_clock::now() - lastBodyWrite,
+                    std::chrono::seconds(3));
+          return {};
+        });
+  }
+  handler->expectEOM([&] {
+    handler->sendHeaders(200, kChunkLength * 2);
+    handler->sendBody(kChunkLength);
+  });
+  EXPECT_CALL(*handler, _onEgressPaused()).Times(0);
+  flushRequestsAndLoopN(1);
+
+  eventBase_.runAfterDelay(
+      [&] {
+        lastBodyWrite = std::chrono::steady_clock::now();
+        handler->sendBody(kChunkLength);
+      },
+      2500);
+  flushRequestsAndLoop();
+
+  handler->txn_->sendEOM();
+  handler->expectDetachTransaction();
+  flushRequestsAndLoop();
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTest, RateDemotionFollowsClientPriorityUpdates) {
+  constexpr uint32_t kResponseLength = 10000;
+  constexpr uint64_t kRateBitsPerSecond = 112000;
+  auto streamPriority = Priority(1, true);
+  std::vector<Priority> sentPriorities;
+
+  socketDriver_->getSocket()->setConnectionFlowControlWindow(
+      static_cast<uint64_t>(kResponseLength) * 2);
+  const auto id = sendRequest();
+  EXPECT_CALL(*socketDriver_->getSocket(), getStreamPriority(id))
+      .WillRepeatedly([&](StreamId) { return streamPriority; });
+  EXPECT_CALL(*socketDriver_->getSocket(), setStreamPriority(id, _))
+      .WillRepeatedly([&](StreamId, const PriorityQueue::Priority& priority)
+                          -> quic::Expected<void, quic::LocalErrorCode> {
+        streamPriority = Priority(priority);
+        sentPriorities.push_back(streamPriority);
+        return {};
+      });
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&] {
+    handler->txn_->setEgressRateDemotion(kRateBitsPerSecond,
+                                         HTTPPriority(7, true));
+    hqSession_->onPriority(id, HTTPPriority(3, false));
+  });
+  handler->expectEOM([&] {
+    handler->sendHeaders(200, kResponseLength);
+    handler->sendBody(kResponseLength);
+  });
+
+  flushRequestsAndLoopN(1);
+  hqSession_->onPriority(id, HTTPPriority(2, true));
+  flushRequestsAndLoop();
+
+  const std::vector<Priority> expected{Priority(3, false),
+                                       Priority(7, true),
+                                       Priority(2, true),
+                                       Priority(2, true)};
+  EXPECT_EQ(sentPriorities, expected);
+  handler->txn_->sendEOM();
+  handler->expectDetachTransaction();
+  flushRequestsAndLoop();
+  hqSession_->closeWhenIdle();
+}
+
 TEST_P(HQDownstreamSessionTest, SimplePost) {
   auto id = sendRequest(getPostRequest(10), false);
   auto& request = getStream(id);

@@ -1081,6 +1081,10 @@ class HQSession
       return &(getSession());
     }
 
+    folly::EventBase* getEventBase() const override {
+      return session_.getEventBase();
+    }
+
    public:
     HQStreamTransportBase() = delete;
 

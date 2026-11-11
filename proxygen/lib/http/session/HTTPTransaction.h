@@ -10,6 +10,8 @@
 
 #include <folly/Optional.h>
 #include <folly/SocketAddress.h>
+#include <folly/TokenBucket.h>
+#include <folly/io/async/AsyncTimeout.h>
 #include <folly/io/async/AsyncTransport.h>
 #include <folly/io/async/DelayedDestructionBase.h>
 #include <folly/io/async/HHWheelTimer.h>
@@ -524,6 +526,10 @@ class HTTPTransaction
     [[nodiscard]] virtual bool getHTTP2PrioritiesEnabled() const = 0;
 
     virtual HTTPSessionBase* getHTTPSessionBase() = 0;
+
+    [[nodiscard]] virtual folly::EventBase* getEventBase() const {
+      return nullptr;
+    }
 
     virtual folly::Optional<const HTTPMessage::HTTP2Priority> getHTTPPriority(
         uint8_t level) = 0;
@@ -1345,6 +1351,18 @@ class HTTPTransaction
   void setEgressRateLimit(uint64_t bitsPerSecond);
 
   /**
+   * Demote the transaction's priority while it sends faster than
+   * bitsPerSecond, using byte credit replenished at bitsPerSecond.
+   * All submitted body bytes consume credit, including while demoted.
+   * Exhausting credit demotes the transaction without pausing it; earning
+   * one packet's credit restores its original priority. Saved credit is
+   * bounded to one packet plus 10ms of bitsPerSecond.
+   * Setting bitsPerSecond to 0 disables rate demotion.
+   */
+  void setEgressRateDemotion(uint64_t bitsPerSecond,
+                             HTTPPriority demotedPriority);
+
+  /**
    * @return true iff egress processing is paused for the handler
    */
   bool isEgressPaused() const {
@@ -1679,6 +1697,12 @@ class HTTPTransaction
 
   bool maybeDelayForRateLimit();
 
+  size_t limitEgressRateDemotion(size_t canSend);
+  void accountForEgressRateDemotion(size_t bytesSent);
+  void setEgressRateDemoted(bool demoted);
+  void scheduleEgressRateDemotionRefill();
+  void egressRateDemotionRefillTimeoutExpired();
+
   bool isEnqueued() const {
     return queueHandle_ ? queueHandle_->isEnqueued() : false;
   }
@@ -1758,6 +1782,21 @@ class HTTPTransaction
     }
     void callbackCanceled() noexcept override {
       // no op
+    }
+
+   private:
+    HTTPTransaction& txn_;
+  };
+
+  class EgressRateDemotionRefillCallback : public folly::AsyncTimeout {
+   public:
+    EgressRateDemotionRefillCallback(HTTPTransaction& txn,
+                                     folly::EventBase* eventBase)
+        : folly::AsyncTimeout(eventBase), txn_(txn) {
+    }
+
+    void timeoutExpired() noexcept override {
+      txn_.egressRateDemotionRefillTimeoutExpired();
     }
 
    private:
@@ -1950,6 +1989,27 @@ class HTTPTransaction
   uint64_t egressLimitBytesPerMs_{0};
   proxygen::TimePoint startRateLimit_;
   uint64_t numLimitedBytesEgressed_{0};
+
+  struct EgressRateDemotion {
+    EgressRateDemotion(HTTPTransaction& txn,
+                       folly::EventBase* eventBase,
+                       const folly::TokenBucket& bucketIn,
+                       HTTPPriority originalPriorityIn,
+                       HTTPPriority demotedPriorityIn)
+        : bucket{bucketIn},
+          originalPriority{originalPriorityIn},
+          demotedPriority{demotedPriorityIn},
+          refillCallback{txn, eventBase} {
+    }
+
+    folly::TokenBucket bucket;
+    HTTPPriority originalPriority;
+    HTTPPriority demotedPriority;
+    EgressRateDemotionRefillCallback refillCallback;
+    bool demoted{false};
+  };
+  // Null unless setEgressRateDemotion is active.
+  std::unique_ptr<EgressRateDemotion> egressRateDemotion_;
 
   folly::Optional<std::chrono::milliseconds> idleTimeout_;
 

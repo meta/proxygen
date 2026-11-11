@@ -151,6 +151,9 @@ class HTTPStreamSourceUpstreamSink
     // it in a chain with the egressSource.  Unfortunately, we pay a cost for
     // that extra filter and never use it (upstream, for now).  So just no-op.
   }
+  void setEgressRateDemotion(uint64_t /*bitsPerSecond*/,
+                             HTTPPriority /*demotedPriority*/) override {
+  }
   // Timeout
   void setIdleTimeout(std::chrono::milliseconds timeout) override {
     // TODO(@damlaj): implement

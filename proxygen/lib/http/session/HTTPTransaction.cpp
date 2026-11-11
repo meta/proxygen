@@ -9,8 +9,10 @@
 #include <proxygen/lib/http/session/HTTPTransaction.h>
 
 #include <algorithm>
+#include <cmath>
 #include <folly/Conv.h>
 #include <folly/container/small_vector.h>
+#include <folly/io/async/EventBase.h>
 #include <folly/io/async/EventBaseManager.h>
 #include <folly/tracing/ScopedTraceSection.h>
 #include <glog/logging.h>
@@ -29,6 +31,7 @@ namespace proxygen {
 
 namespace {
 const int64_t kApproximateMTU = 1400;
+const std::chrono::milliseconds kEgressRateDemotionSlack(10);
 const std::chrono::seconds kRateLimitMaxDelay(10);
 const uint64_t kMaxBufferPerTxn = 65536;
 constexpr uint32_t kMinThreshold = 128 * 1024;
@@ -61,6 +64,12 @@ auto tryParseContentLength(const std::string& cl, const HTTPTransaction& txn) {
       << "Invalid content-length: " << cl << ", ex=" << int(tryCl.error())
       << " " << txn;
   return tryCl;
+}
+
+// The fields the transport keeps per stream; requiredBps is not one of them.
+bool sameStreamPriority(const HTTPPriority& a, const HTTPPriority& b) {
+  return a.urgency == b.urgency && a.incremental == b.incremental &&
+         a.orderId == b.orderId;
 }
 
 } // namespace
@@ -1142,6 +1151,8 @@ size_t HTTPTransaction::sendDeferredBody(uint32_t maxEgress) {
     // Timeout will call notifyTransportPendingEgress again
     return 0;
   }
+  canSend = limitEgressRateDemotion(canSend);
+  const auto bodyBytesEgressedBefore = bodyBytesEgressed_;
 
   size_t nbytes = 0;
   bool willSendEOM = false;
@@ -1216,6 +1227,8 @@ size_t HTTPTransaction::sendDeferredBody(uint32_t maxEgress) {
         .bodyByteStreamRange = folly::none,
     });
   }
+
+  accountForEgressRateDemotion(bodyBytesEgressed_ - bodyBytesEgressedBefore);
 
   // Update the handler's pause state
   notifyTransportPendingEgress();
@@ -1671,6 +1684,116 @@ void HTTPTransaction::setEgressRateLimit(uint64_t bitsPerSecond) {
   numLimitedBytesEgressed_ = 0;
 }
 
+void HTTPTransaction::setEgressRateDemotion(uint64_t bitsPerSecond,
+                                            HTTPPriority demotedPriority) {
+  setEgressRateDemoted(false);
+  egressRateDemotion_.reset();
+
+  if (bitsPerSecond == 0) {
+    return;
+  }
+
+  const auto originalPriority = getHTTPPriority();
+  auto* eventBase = transport_.getEventBase();
+  if (!eventBase || !originalPriority) {
+    VLOG(4) << "rate demotion: transaction does not support rate demotion";
+    return;
+  }
+
+  const auto bytesPerSecond = static_cast<double>(bitsPerSecond) / 8.0;
+  demotedPriority.urgency =
+      HTTPMessage::normalizePriority((int8_t)demotedPriority.urgency);
+  const auto capacity =
+      static_cast<double>(kApproximateMTU) +
+      bytesPerSecond *
+          std::chrono::duration<double>(kEgressRateDemotionSlack).count();
+  egressRateDemotion_ = std::make_unique<EgressRateDemotion>(
+      *this,
+      eventBase,
+      folly::TokenBucket(bytesPerSecond, capacity),
+      *originalPriority,
+      demotedPriority);
+}
+
+size_t HTTPTransaction::limitEgressRateDemotion(size_t canSend) {
+  if (!egressRateDemotion_) {
+    return canSend;
+  }
+
+  const auto available = egressRateDemotion_->bucket.available();
+  if (egressRateDemotion_->demoted) {
+    if (available < kApproximateMTU) {
+      return canSend;
+    }
+    setEgressRateDemoted(false);
+  }
+
+  if (available < kApproximateMTU) {
+    setEgressRateDemoted(true);
+    return canSend;
+  }
+  return static_cast<size_t>(
+      std::min(static_cast<double>(canSend), std::floor(available)));
+}
+
+void HTTPTransaction::accountForEgressRateDemotion(size_t bytesSent) {
+  if (!egressRateDemotion_ || bytesSent == 0) {
+    return;
+  }
+
+  egressRateDemotion_->bucket.consumeOrDrain(static_cast<double>(bytesSent));
+  if (!egressRateDemotion_->demoted &&
+      egressRateDemotion_->bucket.available() < kApproximateMTU) {
+    setEgressRateDemoted(true);
+  }
+}
+
+void HTTPTransaction::setEgressRateDemoted(bool demoted) {
+  if (!egressRateDemotion_ || egressRateDemotion_->demoted == demoted) {
+    return;
+  }
+
+  auto& demotion = *egressRateDemotion_;
+  // Pick up PRIORITY_UPDATEs, which the session applies to the stream directly.
+  const auto current = getHTTPPriority();
+  if (current &&
+      (demoted || !sameStreamPriority(*current, demotion.demotedPriority))) {
+    demotion.originalPriority = *current;
+  }
+  demotion.demoted = demoted;
+  transport_.changePriority(
+      this, demoted ? demotion.demotedPriority : demotion.originalPriority);
+  if (demoted) {
+    scheduleEgressRateDemotionRefill();
+  } else {
+    demotion.refillCallback.cancelTimeout();
+  }
+}
+
+void HTTPTransaction::scheduleEgressRateDemotionRefill() {
+  auto& demotion = *egressRateDemotion_;
+  const auto missingTokens = std::max(
+      0.0, static_cast<double>(kApproximateMTU) - demotion.bucket.available());
+  const auto delayUs = std::max<int64_t>(
+      1,
+      static_cast<int64_t>(
+          std::ceil(missingTokens * 1000000.0 / demotion.bucket.rate())));
+  demotion.refillCallback.scheduleTimeoutHighRes(
+      std::chrono::microseconds(delayUs));
+}
+
+void HTTPTransaction::egressRateDemotionRefillTimeoutExpired() {
+  DestructorGuard guard(this);
+  if (!egressRateDemotion_ || !egressRateDemotion_->demoted) {
+    return;
+  }
+  if (egressRateDemotion_->bucket.available() < kApproximateMTU) {
+    scheduleEgressRateDemotionRefill();
+    return;
+  }
+  setEgressRateDemoted(false);
+}
+
 void HTTPTransaction::notifyTransportPendingEgress() {
   DestructorGuard guard(this);
   CHECK(queueHandle_);
@@ -1819,6 +1942,12 @@ std::ostream& operator<<(std::ostream& os, const HTTPTransaction& txn) {
 
 void HTTPTransaction::updateAndSendPriority(HTTPPriority pri) {
   pri.urgency = HTTPMessage::normalizePriority((int8_t)pri.urgency);
+  if (egressRateDemotion_) {
+    egressRateDemotion_->originalPriority = pri;
+    if (egressRateDemotion_->demoted) {
+      return;
+    }
+  }
   // Note we no longer want to play with the egressQueue_ with the new API.
   transport_.changePriority(this, pri);
 }
