@@ -75,6 +75,7 @@ proxygen_add_library(proxygen_http_session_server
     proxygen_services_http_acceptor
     proxygen_utils_shared_wheel_timer
     Folly::folly_io_async_async_ssl_socket
+    Folly::folly_range
 )
 
 proxygen_add_library(proxygen_http_session_http_session_activity_tracker
