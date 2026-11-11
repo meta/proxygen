@@ -90,6 +90,7 @@ class HTTPServer : public quic::QuicHandshakeSocketHolder::Callback {
     NewConnectionFilter newConnectionFilter;
     ServerFilterFactoryList filterFactories;
     std::shared_ptr<wangle::FizzLoggingCallback> fizzLoggingCallback;
+    std::shared_ptr<HTTPCodecFactory> codecFactory;
 
     /**
      * Zero copy enable threshold. When set to a non-zero value (along with

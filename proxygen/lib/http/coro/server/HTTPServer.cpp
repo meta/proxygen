@@ -228,7 +228,7 @@ HTTPCoroAcceptor* HTTPServer::createAcceptor(
                                          std::move(acceptorConfig),
                                          handler_,
                                          &config_.newConnectionFilter,
-                                         /* codecFactory = */ nullptr,
+                                         config_.codecFactory,
                                          config_.fizzLoggingCallback));
   if (config_.zeroCopyEnableThreshold > 0) {
     acceptor->setZeroCopyEnableThreshold(config_.zeroCopyEnableThreshold);

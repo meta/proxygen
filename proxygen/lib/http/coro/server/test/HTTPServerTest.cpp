@@ -9,6 +9,7 @@
 #include <folly/logging/xlog.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <proxygen/httpserver/tests/HTTPServerTestUtils.h>
+#include <proxygen/lib/http/codec/DefaultHTTPCodecFactory.h>
 #include <proxygen/lib/http/codec/test/TestUtils.h>
 #include <proxygen/lib/http/coro/HTTPCoroSession.h>
 #include <proxygen/lib/http/coro/HTTPFixedSource.h>
@@ -372,6 +373,34 @@ TEST_P(HTTPServerTests, TestSampling) {
       &evb);
   EXPECT_NE(response.headers.get(), nullptr);
   EXPECT_EQ(response.headers->getStatusCode(), 200);
+  stopServer();
+}
+
+TEST_P(HTTPServerTests, TestCodecFactory) {
+  class CountingCodecFactory : public DefaultHTTPCodecFactory {
+   public:
+    std::unique_ptr<HTTPCodec> getCodec(const std::string& nextProtocol,
+                                        TransportDirection direction,
+                                        bool isTLS) override {
+      ++calls;
+      return DefaultHTTPCodecFactory::getCodec(nextProtocol, direction, isTLS);
+    }
+    std::atomic<int> calls{0};
+  };
+  auto codecFactory = std::make_shared<CountingCodecFactory>();
+  serverConfig_.codecFactory = codecFactory;
+  startServer(nullptr, /*expectRequest=*/true);
+  initClient();
+
+  auto url = fmt::format("https://{}/test", server_->address()->describe());
+  auto useQuic = GetParam() == TransportType::QUIC;
+  EventBase evb;
+  auto response = blockingWait(
+      HTTPClient::get(&evb, url, std::chrono::milliseconds(500), useQuic),
+      &evb);
+  EXPECT_NE(response.headers.get(), nullptr);
+  EXPECT_EQ(response.headers->getStatusCode(), 200);
+  EXPECT_EQ(codecFactory->calls, useQuic ? 0 : 1);
   stopServer();
 }
 
