@@ -1026,6 +1026,9 @@ constexpr uint8_t kMaxDatagramHeaderSize = 16;
 constexpr uint8_t kDefaultMaxBufferedDatagrams = 5;
 // Maximum number of streams with datagrams buffered
 constexpr uint8_t kMaxStreamsWithBufferedDatagrams = 10;
+// How long a peer WebTransport stream is held for a wt session that has not
+// been established yet
+constexpr std::chrono::milliseconds kDefaultWtStreamBufferTimeout{1000};
 
 class HTTPQuicCoroSession final
     : public HTTPCoroSession
@@ -1055,6 +1058,10 @@ class HTTPQuicCoroSession final
 
   void setEarlyDataHandler(std::unique_ptr<H3EarlyDataHandler> handler);
 
+  void setWtStreamBufferTimeout(std::chrono::milliseconds timeout) {
+    wtStreamBufferTimeout_ = timeout;
+  }
+
   using HTTPCoroSession::onError;
   folly::EventBase* getEventBase() const override {
     return HTTPCoroSession::getEventBase();
@@ -1076,6 +1083,7 @@ class HTTPQuicCoroSession final
       std::unique_ptr<WebTransportHandler> wtHandler) noexcept override;
 
   void rejectStream(quic::StreamId id) override;
+  void rejectHeldWTStream(quic::StreamId id) override;
 
   folly::Optional<hq::UnidirectionalStreamType> parseUniStreamPreface(
       uint64_t preface) override {
@@ -1114,6 +1122,26 @@ class HTTPQuicCoroSession final
                         quic::StreamId sessionId,
                         size_t toConsume);
 
+  void rejectStream(quic::StreamId id, HTTP3::ErrorCode err);
+
+  /**
+   * A peer's wt stream can arrive prior to its CONNECT request (downstream) or
+   * response (upstream). Its dispatcher holds the wt stream until the request
+   * or response arrives.
+   */
+  void holdWtStream(quic::StreamId sessionId, quic::StreamId streamId);
+  std::vector<quic::StreamId> releaseHeldWtStreams(
+      folly::Optional<quic::StreamId> sessionId);
+  // rejects with err (default WT_BUFFERED_STREAM_REJECTED) if !deliver
+  void drainPendingWtStreams(
+      quic::StreamId sessionId,
+      bool deliver,
+      folly::Optional<HTTP3::ErrorCode> err = folly::none);
+  void rejectAllPendingStreams(HTTP3::ErrorCode err);
+  bool peerRejectedWt() const;
+
+  // same race as above, for quic datagrams buffered against the CONNECT stream
+  void drainBufferedDatagrams(quic::StreamId connectStreamId);
   std::shared_ptr<quic::QuicSocket> quicSocket_;
   std::unique_ptr<H3EarlyDataHandler> earlyDataHandler_;
   hq::HQMultiCodec* multiCodec_{nullptr};
@@ -1401,6 +1429,8 @@ class HTTPQuicCoroSession final
           kDefaultMaxBufferedDatagrams,
           folly::small_vector_policy::policy_in_situ_only<true>>>
       datagramsBuffer_{kMaxStreamsWithBufferedDatagrams};
+  std::chrono::milliseconds wtStreamBufferTimeout_{
+      kDefaultWtStreamBufferTimeout};
   std::shared_ptr<QuicProtocolInfo> currentQuicProtocolInfo_{
       std::make_shared<QuicProtocolInfo>()};
 };

@@ -1103,6 +1103,150 @@ CO_TEST_P_X(H3WtTest, Datagrams) {
   EXPECT_EQ(wtHandlerCtx->dgrams.back()->toString(), "datagram2");
 }
 
+CO_TEST_P_X(H3WtTest, PeerStreamBeforeConnectResponse) {
+  constexpr quic::StreamId kConnectStreamId = 0;
+  HTTPMessage msg;
+  msg.setMethod(HTTPMethod::CONNECT);
+  msg.setUpgradeProtocol("webtransport");
+
+  auto handler = DummyWtHandler::make();
+  auto handlerCtx = handler->ctx;
+  auto reservation = session_->reserveRequest();
+  auto fut =
+      co_withExecutor(
+          &evb_,
+          session_->sendWtReq(std::move(*reservation), msg, std::move(handler)))
+          .start();
+  co_await rescheduleN(1);
+
+  auto uniId = openPeerUniStream(kConnectStreamId);
+  co_await rescheduleN(2);
+  EXPECT_TRUE(handlerCtx->peerStreams.empty());
+  EXPECT_FALSE(muxTp->socketDriver_.streams_[uniId].error.has_value());
+
+  deliverRespHeaders(kConnectStreamId, makeResponse(200), /*eom=*/false);
+  auto res = co_await co_awaitTry(std::move(fut));
+  CO_ASSERT_TRUE(res.hasValue());
+  CO_ASSERT_NE(res->wt, nullptr);
+  co_await rescheduleN(2);
+
+  EXPECT_EQ(handlerCtx->peerStreams.size(), 1);
+  EXPECT_FALSE(muxTp->socketDriver_.streams_[uniId].error.has_value());
+  res->wt->closeSession(folly::none);
+}
+
+CO_TEST_P_X(H3WtTest, ShortPeerStreamBeforeConnectResponse) {
+  // like mvfst, discard a finished stream with no read or peek callback
+  muxTp->socketDriver_.setReapClosedStreams(true);
+  constexpr quic::StreamId kConnectStreamId = 0;
+  HTTPMessage msg;
+  msg.setMethod(HTTPMethod::CONNECT);
+  msg.setUpgradeProtocol("webtransport");
+
+  auto handler = DummyWtHandler::make();
+  auto handlerCtx = handler->ctx;
+  auto reservation = session_->reserveRequest();
+  auto fut =
+      co_withExecutor(
+          &evb_,
+          session_->sendWtReq(std::move(*reservation), msg, std::move(handler)))
+          .start();
+  co_await rescheduleN(1);
+
+  // the whole stream, data and FIN, arrives while it is held
+  auto uniId = openPeerUniStream(kConnectStreamId);
+  deliverStreamData(uniId, folly::IOBuf::copyBuffer("hello"), /*eof=*/true);
+  co_await rescheduleN(2);
+
+  deliverRespHeaders(kConnectStreamId, makeResponse(200), /*eom=*/false);
+  auto res = co_await co_awaitTry(std::move(fut));
+  CO_ASSERT_TRUE(res.hasValue());
+  CO_ASSERT_NE(res->wt, nullptr);
+  co_await rescheduleN(2);
+  CO_ASSERT_EQ(handlerCtx->peerStreams.size(), 1u);
+
+  auto read = res->wt->readStreamData(uniId);
+  CO_ASSERT_TRUE(read.hasValue());
+  auto data = co_await co_awaitTry(folly::coro::timeout(
+      std::move(read.value()), std::chrono::milliseconds(500)));
+  CO_ASSERT_TRUE(data.hasValue());
+  EXPECT_EQ(data->data->toString(), "hello");
+  EXPECT_TRUE(data->fin);
+  res->wt->closeSession(folly::none);
+}
+
+CO_TEST_P_X(H3WtTest, HeldStreamResetBeforeConnectResponse) {
+  muxTp->socketDriver_.setReapClosedStreams(true);
+  constexpr quic::StreamId kConnectStreamId = 0;
+  HTTPMessage msg;
+  msg.setMethod(HTTPMethod::CONNECT);
+  msg.setUpgradeProtocol("webtransport");
+
+  // a reset frees the read handle once delivered, so read as soon as it is
+  auto handler = std::make_unique<NiceMock<MockWebTransportHandler>>();
+  folly::Optional<folly::SemiFuture<WebTransport::StreamData>> read;
+  EXPECT_CALL(*handler, onNewUniStream(_))
+      .WillOnce([&](WebTransport::StreamReadHandle* readHandle) {
+        read.emplace(readHandle->readStreamData());
+      });
+  auto reservation = session_->reserveRequest();
+  auto fut =
+      co_withExecutor(
+          &evb_,
+          session_->sendWtReq(std::move(*reservation), msg, std::move(handler)))
+          .start();
+  co_await rescheduleN(1);
+
+  auto uniId = openPeerUniStream(kConnectStreamId);
+  co_await rescheduleN(2);
+  muxTp->socketDriver_.addReadError(uniId, WebTransport::toHTTPErrorCode(77));
+  co_await rescheduleN(2);
+
+  deliverRespHeaders(kConnectStreamId, makeResponse(200), /*eom=*/false);
+  auto res = co_await co_awaitTry(std::move(fut));
+  CO_ASSERT_TRUE(res.hasValue());
+  CO_ASSERT_NE(res->wt, nullptr);
+  co_await rescheduleN(2);
+
+  CO_ASSERT_TRUE(read.has_value());
+  auto data = co_await co_awaitTry(
+      folly::coro::timeout(std::move(*read), std::chrono::milliseconds(500)));
+  EXPECT_TRUE(data.hasException());
+  res->wt->closeSession(folly::none);
+}
+
+CO_TEST_P_X(H3WtTest, DatagramBeforeConnectResponse) {
+  constexpr quic::StreamId kConnectStreamId = 0;
+  HTTPMessage msg;
+  msg.setMethod(HTTPMethod::CONNECT);
+  msg.setUpgradeProtocol("webtransport");
+
+  auto handler = DummyWtHandler::make();
+  auto handlerCtx = handler->ctx;
+  auto reservation = session_->reserveRequest();
+  auto fut =
+      co_withExecutor(
+          &evb_,
+          session_->sendWtReq(std::move(*reservation), msg, std::move(handler)))
+          .start();
+  co_await rescheduleN(1);
+
+  deliverQuicDatagram(kConnectStreamId, "datagram1");
+  co_await rescheduleN(2);
+  EXPECT_TRUE(handlerCtx->dgrams.empty());
+
+  deliverRespHeaders(kConnectStreamId, makeResponse(200), /*eom=*/false);
+  auto res = co_await co_awaitTry(std::move(fut));
+  CO_ASSERT_TRUE(res.hasValue());
+  CO_ASSERT_NE(res->wt, nullptr);
+  co_await rescheduleN(2);
+
+  EXPECT_EQ(handlerCtx->dgrams.size(), 1u);
+  CO_ASSERT_TRUE(!handlerCtx->dgrams.empty());
+  EXPECT_EQ(handlerCtx->dgrams.back()->toString(), "datagram1");
+  res->wt->closeSession(folly::none);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     H3WtTest,
     H3WtTest,

@@ -4536,10 +4536,76 @@ CO_TEST_P_X(H2DownstreamWtTest, WebTransportTest) {
 }
 
 class H3DownstreamWtTest : public HTTPDownstreamSessionTest {
+ protected:
   void SetUp() override {
     initSelfCodec_ = enableH3CodecWtSettings;
     HTTPDownstreamSessionTest::SetUp();
   }
+
+  // the handler accepts the CONNECT, then sends a 2xx with a wt handler once
+  // sendResponse_ is posted
+  void serveWtConnect() {
+    auto wtHandler = DummyWtHandler::make();
+    wtHandlerCtx_ = wtHandler->ctx;
+    EXPECT_CALL(respSource_, readHeaderEvent())
+        .WillOnce(Return(folly::coro::co_invoke(
+            [this, wtHandler = std::move(wtHandler)]() mutable
+                -> folly::coro::Task<HTTPHeaderEvent> {
+              co_await sendResponse_;
+              HTTPHeaderEvent ev{makeResponse(200), /*inEOM=*/false};
+              ev.wtHandler = std::move(wtHandler);
+              co_return ev;
+            })));
+    EXPECT_CALL(respSource_, readBodyEvent(_)).Times(0);
+    EXPECT_CALL(respSource_, stopReading(_));
+    handlerFn_ =
+        addSimpleStrictHandler([this](folly::EventBase * /*evb*/,
+                                      HTTPSessionContextPtr /*ctx*/,
+                                      HTTPSourceHolder requestSource)
+                                   -> folly::coro::Task<HTTPSourceHolder> {
+          co_await expectRequest(
+              requestSource, HTTPMethod::CONNECT, /*path=*/"/", /*eom=*/false);
+          requestSource.release();
+          requestParsed_.post();
+          co_return &respSource_;
+        });
+  }
+
+  HTTPCodec::StreamID sendWtConnect() {
+    auto req = getGetRequest("/");
+    req.setUpgradeProtocol("webtransport");
+    return sendRequest(req, /*body=*/nullptr, /*eom=*/false, /*eof=*/false);
+  }
+
+  void sendDatagram(HTTPCodec::StreamID connectStreamId,
+                    std::string_view data) {
+    auto &socketDriver = muxTransport_->socketDriver_;
+    socketDriver.datagramCB_ = static_cast<HTTPQuicCoroSession *>(session_);
+    folly::IOBufQueue queue{folly::IOBufQueue::cacheChainLength()};
+    folly::io::QueueAppender appender(&queue, /*growth=*/8);
+    XCHECK(quic::encodeQuicInteger(connectStreamId / 4,
+                                   [&](auto val) { appender.writeBE(val); }));
+    queue.append(folly::IOBuf::copyBuffer(data));
+    socketDriver.addDatagram(queue.move());
+    socketDriver.addDatagramsAvailableReadEvent();
+  }
+
+  quic::StreamId openPeerUniStream(HTTPCodec::StreamID connectStreamId) {
+    auto uniId = muxTransport_->nextUnidirectionalStreamId_;
+    muxTransport_->nextUnidirectionalStreamId_ += 4;
+    folly::IOBufQueue prefaceBuf{folly::IOBufQueue::cacheChainLength()};
+    hq::writeWTStreamPreface(
+        prefaceBuf, hq::WebTransportStreamType::UNI, connectStreamId);
+    muxTransport_->socketDriver_.addReadEvent(uniId, prefaceBuf.move());
+    muxTransport_->socketDriver_.addReadEvent(uniId, makeBuf(100));
+    return uniId;
+  }
+
+  MockHTTPSource respSource_;
+  folly::coro::Baton sendResponse_;
+  folly::coro::Baton requestParsed_;
+  std::shared_ptr<const DummyWtHandler::Ctx> wtHandlerCtx_;
+  std::shared_ptr<HandlerFn> handlerFn_;
 };
 
 CO_TEST_P_X(H3DownstreamWtTest, WebTransportTest) {
@@ -4596,6 +4662,90 @@ CO_TEST_P_X(H3DownstreamWtTest, WebTransportTest) {
 
   wtHandlerCtx->wtSession->closeSession(folly::none);
   co_return;
+}
+
+CO_TEST_P_X(H3DownstreamWtTest, PeerStreamBeforeConnectRequest) {
+  serveWtConnect();
+  // the CONNECT stream is the client's first bidi stream, but the wt stream
+  // arrives before its headers
+  constexpr HTTPCodec::StreamID kConnectStreamId = 0;
+  openPeerUniStream(kConnectStreamId);
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  CO_ASSERT_EQ(sendWtConnect(), kConnectStreamId);
+
+  co_await requestParsed_;
+  sendResponse_.post();
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  CO_ASSERT_NE(wtHandlerCtx_->wtSession, nullptr);
+  EXPECT_EQ(wtHandlerCtx_->peerStreams.size(), 1u);
+
+  wtHandlerCtx_->wtSession->closeSession(folly::none);
+}
+
+CO_TEST_P_X(H3DownstreamWtTest, PeerStreamBeforeConnectResponse) {
+  serveWtConnect();
+  auto connectStreamId = sendWtConnect();
+  co_await requestParsed_;
+
+  openPeerUniStream(connectStreamId);
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  EXPECT_EQ(wtHandlerCtx_->wtSession, nullptr);
+
+  sendResponse_.post();
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  CO_ASSERT_NE(wtHandlerCtx_->wtSession, nullptr);
+  EXPECT_EQ(wtHandlerCtx_->peerStreams.size(), 1u);
+
+  wtHandlerCtx_->wtSession->closeSession(folly::none);
+}
+
+CO_TEST_P_X(H3DownstreamWtTest, HeldStreamRejectedOnTimeout) {
+  static_cast<HTTPQuicCoroSession *>(session_)->setWtStreamBufferTimeout(
+      std::chrono::milliseconds(20));
+  // no CONNECT ever arrives for the client's first bidi stream
+  auto uniId = openPeerUniStream(/*connectStreamId=*/0);
+  co_await folly::coro::sleep(std::chrono::milliseconds(100));
+
+  const uint64_t bufferedRejectedErr =
+      WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected);
+  auto &stream = muxTransport_->socketDriver_.streams_[uniId];
+  CO_ASSERT_TRUE(stream.error.has_value());
+  EXPECT_EQ(*stream.error, bufferedRejectedErr);
+}
+
+CO_TEST_P_X(H3DownstreamWtTest, DatagramBeforeConnectRequest) {
+  serveWtConnect();
+  constexpr HTTPCodec::StreamID kConnectStreamId = 0;
+  sendDatagram(kConnectStreamId, "datagram1");
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  CO_ASSERT_EQ(sendWtConnect(), kConnectStreamId);
+
+  co_await requestParsed_;
+  sendResponse_.post();
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  CO_ASSERT_NE(wtHandlerCtx_->wtSession, nullptr);
+  CO_ASSERT_EQ(wtHandlerCtx_->dgrams.size(), 1u);
+  EXPECT_EQ(wtHandlerCtx_->dgrams.back()->toString(), "datagram1");
+
+  wtHandlerCtx_->wtSession->closeSession(folly::none);
+}
+
+CO_TEST_P_X(H3DownstreamWtTest, DatagramBeforeConnectResponse) {
+  serveWtConnect();
+  auto connectStreamId = sendWtConnect();
+  co_await requestParsed_;
+
+  sendDatagram(connectStreamId, "datagram1");
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  EXPECT_EQ(wtHandlerCtx_->wtSession, nullptr);
+
+  sendResponse_.post();
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  CO_ASSERT_NE(wtHandlerCtx_->wtSession, nullptr);
+  CO_ASSERT_EQ(wtHandlerCtx_->dgrams.size(), 1u);
+  EXPECT_EQ(wtHandlerCtx_->dgrams.back()->toString(), "datagram1");
+
+  wtHandlerCtx_->wtSession->closeSession(folly::none);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -4656,10 +4806,10 @@ INSTANTIATE_TEST_SUITE_P(
     Values(TestParams({.codecProtocol = CodecProtocol::HTTP_2})),
     paramsToTestName);
 
-INSTANTIATE_TEST_SUITE_P(
-    H3DownstreamWtTest,
-    H3DownstreamWtTest,
-    Values(TestParams({.codecProtocol = CodecProtocol::HQ})),
-    paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(H3DownstreamWtTest,
+                         H3DownstreamWtTest,
+                         Values(TestParams({.codecProtocol = CodecProtocol::HQ,
+                                            .enableDatagrams = true})),
+                         paramsToTestName);
 
 } // namespace proxygen::coro::test

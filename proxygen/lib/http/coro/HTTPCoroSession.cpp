@@ -80,6 +80,9 @@ void setSecureMsg(HTTPMessage& msg,
 }
 
 using CoroWtSession = proxygen::coro::detail::CoroWtSession;
+
+const auto kBufferedStreamRejectedErr = static_cast<HTTP3::ErrorCode>(
+    WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected));
 class CoroWtSessionImpl : public CoroWtSession {
  public:
   using CoroWtSession::CoroWtSession;
@@ -983,6 +986,9 @@ void HTTPCoroSession::onHeadersComplete(HTTPCodec::StreamID streamID,
 }
 
 void HTTPQuicCoroSession::streamHeadersComplete(StreamState& stream) {
+  if (stream.isWtConnectStream()) {
+    return;
+  }
   if (isDatagramEnabled() && !datagramsBuffer_.empty()) {
     auto itr = datagramsBuffer_.find(stream.getID());
     if (itr != datagramsBuffer_.end()) {
@@ -1662,6 +1668,9 @@ void HTTPQuicCoroSession::onSettings(const SettingsList& settings) {
   }
   multiCodec_->getQPACKCodec().setEncoderHeaderTableSize(tableSize);
   multiCodec_->getQPACKCodec().setMaxVulnerable(blocked);
+  if (peerRejectedWt()) {
+    rejectAllPendingStreams(HTTP3::ErrorCode::HTTP_STREAM_CREATION_ERROR);
+  }
   writeEvent_.signal();
   XLOG(DBG3) << "Applied SETTINGS sess=" << *this << " size=" << tableSize
              << " blocked=" << blocked;
@@ -2142,7 +2151,10 @@ void HTTPQuicCoroSession::onDatagramsAvailable() noexcept {
       continue;
     }
 
-    if (!stream || stream->streamSource.isUnprocessed()) {
+    // datagrams can arrive before the CONNECT stream completes its upgrade, in
+    // which case there is no wt session to deliver them to yet
+    if (!stream || stream->streamSource.isUnprocessed() ||
+        stream->isWtConnectStream()) {
       XLOG(DBG5) << "Stream cannot receive datagrams. streamId=" << streamId
                  << " len=" << datagramQ.chainLength() << " sess=" << *this;
       // TODO: a possible optimization would be to discard datagrams destined
@@ -2509,6 +2521,8 @@ void HTTPCoroSession::eraseStream(HTTPCodec::StreamID id) {
 }
 
 void HTTPQuicCoroSession::eraseStream(HTTPCodec::StreamID id) {
+  drainPendingWtStreams(id, /*deliver=*/false);
+  datagramsBuffer_.erase(id);
   HTTPCoroSession::eraseStream(id);
   if (multiCodec_->setCurrentStream(id) && multiCodec_->isParserPaused()) {
     multiCodec_->encodeCancelStream(id);
@@ -2766,6 +2780,8 @@ void HTTPQuicCoroSession::onConnectionError(quic::QuicError error) noexcept {
               << " sess=" << *this;
   }
   connectionError(httpError, "QUIC connection error");
+  rejectAllPendingStreams(kBufferedStreamRejectedErr);
+  datagramsBuffer_.clear();
   /**
    * Matching both destructors in QuicClientTransport & QuicServerTransport;
    * they invoke the private ::closeImpl(drainConnection = false) member fn,
@@ -2818,12 +2834,13 @@ void HTTPQuicCoroSession::resetIdleTimeout() {
 }
 
 void HTTPQuicCoroSession::rejectStream(quic::StreamId id) {
-  quicSocket_->stopSending(
-      id,
-      (quic::ApplicationErrorCode)HTTP3::ErrorCode::HTTP_STREAM_CREATION_ERROR);
-  quicSocket_->resetStream(
-      id,
-      (quic::ApplicationErrorCode)HTTP3::ErrorCode::HTTP_STREAM_CREATION_ERROR);
+  rejectStream(id, HTTP3::ErrorCode::HTTP_STREAM_CREATION_ERROR);
+}
+
+void HTTPQuicCoroSession::rejectStream(quic::StreamId id,
+                                       HTTP3::ErrorCode err) {
+  quicSocket_->stopSending(id, (quic::ApplicationErrorCode)err);
+  quicSocket_->resetStream(id, (quic::ApplicationErrorCode)err);
   quicSocket_->setPeekCallback(id, nullptr);
 }
 
@@ -2981,10 +2998,110 @@ void HTTPQuicCoroSession::dispatchWTStream(quic::StreamId streamId,
   }
   auto* connectStream = findStream(sessionId);
   auto* wtSession = connectStream ? connectStream->wtSession.get() : nullptr;
-  if (!wtSession || !wtSession->wtSession().acquireIngressStream(streamId)) {
-    XLOG(DBG4) << "Rejected wtSess=" << wtSession << "; sessId=" << sessionId
-               << "; streamId=" << streamId << " sess=" << *this;
-    rejectStream(streamId);
+
+  // no wtSession until the CONNECT's 2xx, or if its not a wt CONNECT
+  if (wtSession) {
+    if (!wtSession->wtSession().acquireIngressStream(streamId)) {
+      XLOG(DBG4) << "Rejected wtSess=" << wtSession << "; sessId=" << sessionId
+                 << "; streamId=" << streamId << " sess=" << *this;
+      rejectStream(streamId);
+    }
+    // happy path: delivered to the established wt session
+    return;
+  }
+
+  // a downstream can see a wt stream before its CONNECT stream's headers
+  const bool connectMayArrive = !connectStream && isDownstream() &&
+                                quic::isBidirectionalStream(sessionId);
+  if (((connectStream && connectStream->isWtConnectStream()) ||
+       connectMayArrive) &&
+      !peerRejectedWt()) {
+    holdWtStream(sessionId, streamId);
+    return;
+  }
+
+  XLOG(DBG4) << "Rejecting wt stream with no eligible session; wt-sess-id="
+             << sessionId << "; stream-id=" << streamId << " sess=" << *this;
+  rejectStream(streamId);
+}
+
+void HTTPQuicCoroSession::holdWtStream(quic::StreamId sessionId,
+                                       quic::StreamId streamId) {
+  XLOG(DBG4) << "Holding wt stream id=" << streamId
+             << " wt-sess-id=" << sessionId << " sess=" << *this;
+  if (quic::isUnidirectionalStream(streamId)) {
+    uniStreamDispatcher_.holdWTStream(
+        streamId, sessionId, wtStreamBufferTimeout_);
+  } else {
+    bidiStreamDispatcher_.holdWTStream(
+        streamId, sessionId, wtStreamBufferTimeout_);
+  }
+}
+
+std::vector<quic::StreamId> HTTPQuicCoroSession::releaseHeldWtStreams(
+    folly::Optional<quic::StreamId> sessionId) {
+  auto streams = uniStreamDispatcher_.releaseHeldWTStreams(sessionId);
+  auto bidiStreams = bidiStreamDispatcher_.releaseHeldWTStreams(sessionId);
+  streams.insert(streams.end(), bidiStreams.begin(), bidiStreams.end());
+  return streams;
+}
+
+void HTTPQuicCoroSession::rejectHeldWTStream(quic::StreamId id) {
+  rejectStream(id, kBufferedStreamRejectedErr);
+}
+
+bool HTTPQuicCoroSession::peerRejectedWt() const {
+  return multiCodec_->receivedSettings() &&
+         !::proxygen::detail::supportsH3Wt(multiCodec_->getTransportDirection(),
+                                           multiCodec_->getIngressSettings(),
+                                           multiCodec_->getEgressSettings());
+}
+
+void HTTPQuicCoroSession::drainBufferedDatagrams(
+    quic::StreamId connectStreamId) {
+  auto it = datagramsBuffer_.find(connectStreamId);
+  if (it == datagramsBuffer_.end()) {
+    return;
+  }
+  auto datagrams = std::move(it->second);
+  datagramsBuffer_.erase(it);
+  auto* connectStream = findStream(connectStreamId);
+  auto* wtSession = connectStream ? connectStream->wtSession.get() : nullptr;
+  if (!wtSession) {
+    return;
+  }
+  XLOG(DBG4) << "Delivering " << datagrams.size()
+             << " buffered wt datagrams id=" << connectStreamId
+             << " sess=" << *this;
+  for (auto& datagram : datagrams) {
+    wtSession->wtSession().onDatagram(std::move(datagram));
+  }
+}
+
+void HTTPQuicCoroSession::rejectAllPendingStreams(HTTP3::ErrorCode err) {
+  for (auto streamId : releaseHeldWtStreams(folly::none)) {
+    rejectStream(streamId, err);
+  }
+}
+
+void HTTPQuicCoroSession::drainPendingWtStreams(
+    quic::StreamId sessionId,
+    bool deliver,
+    folly::Optional<HTTP3::ErrorCode> err) {
+  auto streams = releaseHeldWtStreams(sessionId);
+  if (streams.empty()) {
+    return;
+  }
+  auto* connectStream = findStream(sessionId);
+  auto* wtSession =
+      deliver && connectStream ? connectStream->wtSession.get() : nullptr;
+  XLOG(DBG4) << (wtSession ? "Delivering " : "Rejecting ") << streams.size()
+             << " held wt streams wt-sess-id=" << sessionId
+             << " sess=" << *this;
+  for (auto streamId : streams) {
+    if (!wtSession || !wtSession->wtSession().acquireIngressStream(streamId)) {
+      rejectStream(streamId, err.value_or(kBufferedStreamRejectedErr));
+    }
   }
 }
 
@@ -3524,6 +3641,8 @@ folly::coro::Task<void> HTTPQuicCoroSession::writeLoop() noexcept {
     }
   }
   if (quicSocket_->good()) {
+    rejectAllPendingStreams(kBufferedStreamRejectedErr);
+    datagramsBuffer_.clear();
     XLOG(DBG4) << "Closing QuicSocket from writeLoop with "
                << ((connectionError_) ? "error" : "no error")
                << " sess=" << *this;
@@ -4014,7 +4133,10 @@ std::shared_ptr<WebTransport> HTTPQuicCoroSession::createWebTransport(
                                             wtConfig,
                                             connectStreamId);
   stream->wtSession = h3Wt;
-  return h3Wt->start(h3Wt, std::move(ingressSource), std::move(egress));
+  auto wt = h3Wt->start(h3Wt, std::move(ingressSource), std::move(egress));
+  drainPendingWtStreams(connectStreamId, /*deliver=*/true);
+  drainBufferedDatagrams(connectStreamId);
+  return wt;
 }
 
 } // namespace proxygen::coro
