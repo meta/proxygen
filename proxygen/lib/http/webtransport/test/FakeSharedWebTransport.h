@@ -424,7 +424,11 @@ class FakeSharedWebTransport : public WebTransport {
     readHandles.clear();
   }
   quic::TransportInfo getTransportInfo() const override {
-    return quic::TransportInfo{};
+    return transportInfo_;
+  }
+
+  void setTransportInfo(const quic::TransportInfo& transportInfo) {
+    transportInfo_ = transportInfo;
   }
 
   const folly::SocketAddress& getPeerAddress() const override {
@@ -764,6 +768,7 @@ class FakeSharedWebTransport : public WebTransport {
   WebTransportHandler* peerHandler_{nullptr};
   folly::SocketAddress peerAddress_{"0.0.0.0", 123};
   folly::SocketAddress localAddress_{"0.0.0.0", 456};
+  quic::TransportInfo transportInfo_;
   folly::Optional<uint64_t> maxLocalBidiStreams_;
   folly::Optional<uint64_t> maxLocalUniStreams_;
   folly::F14FastMap<uint64_t, BidiHalves> localBidiStreams_;
