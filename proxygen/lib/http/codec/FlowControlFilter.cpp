@@ -109,7 +109,6 @@ void FlowControlFilter::onBody(StreamID stream,
       VLOG(4) << "recvWindow full";
     }
     toAck_ += padding;
-    CHECK(recvWindow_.free(padding));
     callback_->onBody(stream, std::move(chain), padding);
   }
 }

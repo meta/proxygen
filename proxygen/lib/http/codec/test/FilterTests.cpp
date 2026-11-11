@@ -12,6 +12,7 @@
 #include <proxygen/lib/http/HTTPMessage.h>
 #include <proxygen/lib/http/codec/DebugFilter.h>
 #include <proxygen/lib/http/codec/FlowControlFilter.h>
+#include <proxygen/lib/http/codec/HTTP2Codec.h>
 #include <proxygen/lib/http/codec/HTTPChecks.h>
 #include <proxygen/lib/http/codec/test/MockHTTPCodec.h>
 #include <proxygen/lib/http/codec/test/TestUtils.h>
@@ -147,6 +148,70 @@ TEST_F(DefaultFlowControl, FlowControlConstruct) {
       chain_.generateBody(
           writeBuf_, 1, makeBuf(2), HTTPCodec::NoPadding, false),
       ".*");
+}
+
+TEST(FlowControlFilterWireTest, PaddingOnlyDataReturnsCreditOnce) {
+  class Callback : public FakeHTTPCodecCallback {
+   public:
+    void onBody(HTTPCodec::StreamID stream,
+                std::unique_ptr<folly::IOBuf> body,
+                uint16_t padding) override {
+      CHECK_EQ(stream, 1);
+      CHECK_EQ(body->computeChainDataLength(), 0);
+      CHECK_EQ(padding, 256);
+      ++frames;
+      flow->ingressBytesProcessed(output, 0);
+      output.move();
+    }
+    FlowControlFilter* flow{nullptr};
+    folly::IOBufQueue output{folly::IOBufQueue::cacheChainLength()};
+    uint64_t frames{0};
+  } callback;
+  NiceMock<MockFlowControlCallback> flowCallback;
+  auto codec = std::make_unique<HTTP2Codec>(TransportDirection::DOWNSTREAM);
+  auto* rawCodec = codec.get();
+  HTTPCodecFilterChain chain(std::move(codec));
+  auto flow = std::make_unique<FlowControlFilter>(
+      flowCallback, callback.output, rawCodec);
+  callback.flow = flow.get();
+  chain.addFilters(std::move(flow));
+  chain.setCallback(&callback);
+  HTTP2Codec client(TransportDirection::UPSTREAM);
+  folly::IOBufQueue input{folly::IOBufQueue::cacheChainLength()};
+  client.generateConnectionPreface(input);
+  client.generateSettings(input);
+  auto preface = input.move();
+  ASSERT_EQ(chain.onIngress(*preface), preface->computeChainDataLength());
+  ASSERT_EQ(callback.sessionErrors, 0);
+
+  const std::string frameHeader("\x00\x01\x00\x00\x08\x00\x00\x00\x01", 9);
+  const auto frame = frameHeader + std::string(1, '\xff') + std::string(255, 0);
+  std::string batch;
+  for (size_t i = 0; i < 128; ++i) {
+    batch += frame;
+  }
+  auto wire = folly::IOBuf::copyBuffer(batch);
+  for (size_t i = 0; i < 2; ++i) {
+    ASSERT_EQ(chain.onIngress(*wire), wire->length());
+    ASSERT_EQ(callback.sessionErrors, 0);
+    EXPECT_EQ(callback.flow->getRecvWindow().getSize(), 65535);
+  }
+  EXPECT_EQ(callback.frames, 256);
+  EXPECT_EQ(callback.flow->getRecvWindow().getSize(), 65535);
+}
+
+TEST_F(DefaultFlowControl, PaddingCreditPreservesOutstandingBody) {
+  EXPECT_CALL(callback_, onBody(_, _, _)).WillRepeatedly(Return());
+  callbackStart_->onBody(1, makeBuf(1024), 256);
+  EXPECT_FALSE(filter_->ingressBytesProcessed(writeBuf_, 0));
+  EXPECT_EQ(filter_->getRecvWindow().getSize(), kInitialCapacity - 1280);
+
+  const auto bodySize = kInitialCapacity / 2 + 1;
+  callbackStart_->onBody(3, makeBuf(bodySize), 128);
+  EXPECT_CALL(*codec_, generateWindowUpdate(_, 0, bodySize + 384));
+  EXPECT_TRUE(filter_->ingressBytesProcessed(writeBuf_, bodySize));
+  EXPECT_EQ(filter_->getRecvWindow().getSize(), kInitialCapacity - 1024);
+  EXPECT_EQ(filter_->getRecvWindow().getOutstanding(), 1024);
 }
 
 TEST_F(DefaultFlowControl, SendUpdate) {
