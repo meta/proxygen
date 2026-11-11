@@ -256,11 +256,11 @@ void HTTP1xLlCodec::backfillPartialRequest() {
 
 void HTTP1xLlCodec::onParserError() {
   const llhttp_errno_t err = parser_->error();
+  const char* reason = parser_->errorReason();
   std::string errorMsg;
   if (!ingressState_.errorMessage.empty()) {
     errorMsg = ingressState_.errorMessage;
   } else {
-    const char* reason = parser_->errorReason();
     errorMsg = folly::to<std::string>("Error parsing message: ",
                                       llhttp_errno_name(err),
                                       " ",
@@ -273,6 +273,9 @@ void HTTP1xLlCodec::onParserError() {
     errorMsg = folly::to<std::string>(
         errorMsg, " [Context]=", ingressState_.errorContext);
   }
+  LOG(ERROR) << "HTTP1xLlCodec ingress error: " << llhttp_errno_name(err) << " "
+             << (reason ? reason : "")
+             << " [Context]=" << ingressState_.errorContext;
   HTTPException error(HTTPException::Direction::INGRESS, errorMsg);
   if (!ingressState_.errorContext.empty()) {
     error.setContext(ingressState_.errorContext);
