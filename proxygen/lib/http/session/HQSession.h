@@ -606,6 +606,7 @@ class HQSession
   }
 
   void rejectStream(quic::StreamId /* id */) override;
+  void rejectHeldWTStream(quic::StreamId id) override;
 
   folly::Optional<hq::UnidirectionalStreamType> parseUniStreamPreface(
       uint64_t preface) override;
@@ -2012,30 +2013,13 @@ class HQSession
   folly::EvictingCacheMap<quic::StreamId, HTTPPriority> priorityUpdatesBuffer_{
       kMaxBufferedPriorityUpdates};
 
-  // Buffer for peer-initiated WebTransport streams that arrived before the
-  // matching CONNECT stream became a valid WT session (see WT-over-H3 §4.6).
-  class PendingWTSession : public folly::HHWheelTimer::Callback {
-   public:
-    PendingWTSession(HQSession& session, quic::StreamId sessionID)
-        : session_(session), sessionID_(sessionID) {
-    }
-    void timeoutExpired() noexcept override;
-    void callbackCanceled() noexcept override {
-    }
-    std::vector<quic::StreamId> streams;
-
-   private:
-    HQSession& session_;
-    quic::StreamId sessionID_;
-  };
-  folly::F14FastMap<quic::StreamId, std::unique_ptr<PendingWTSession>>
-      pendingWTStreams_;
   std::chrono::milliseconds wtStreamBufferTimeout_{
       kDefaultWTStreamBufferTimeout};
 
-  void bufferPendingWTStream(quic::StreamId sessionID, quic::StreamId streamID);
+  bool hasHeldWTStreams(quic::StreamId sessionID) const;
+  std::vector<quic::StreamId> releaseHeldWTStreams(
+      folly::Optional<quic::StreamId> sessionID);
   void deliverPendingWTStreams(quic::StreamId sessionID) noexcept;
-  void expirePendingWTStreams(quic::StreamId sessionID) noexcept;
   void deliverWTStream(HQStreamTransportBase* connectStream,
                        quic::StreamId streamID);
   void rejectStream(quic::StreamId id, HTTP3::ErrorCode err);

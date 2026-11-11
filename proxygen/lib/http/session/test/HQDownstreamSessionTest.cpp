@@ -4548,6 +4548,30 @@ TEST_P(HQDownstreamSessionTestWebTransport, BufferedWTStreamRejectedOnClose) {
   EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error, bufferedRejectedErr);
 }
 
+// A buffered stream whose CONNECT never arrives is rejected with
+// WT_BUFFERED_STREAM_REJECTED once the buffer timeout expires.
+TEST_P(HQDownstreamSessionTestWebTransport, BufferedWTStreamExpires) {
+  const quic::StreamId sessionId = 0;
+  const quic::StreamId wtStreamId = 14;
+  hqSession_->setWTStreamBufferTimeout(std::chrono::milliseconds(50));
+
+  sendSettings();
+  queuePeerWTUniStream(socketDriver_.get(), wtStreamId, sessionId);
+  flushRequestsAndLoopN(1);
+  EXPECT_FALSE(socketDriver_->streams_[wtStreamId].error.has_value());
+
+  eventBase_.runAfterDelay([&] { eventBase_.terminateLoopSoon(); }, 100);
+  eventBase_.loopForever();
+
+  const uint64_t bufferedRejectedErr =
+      WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected);
+  ASSERT_TRUE(socketDriver_->streams_[wtStreamId].error.has_value());
+  EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error, bufferedRejectedErr);
+
+  hqSession_->closeWhenIdle();
+  flushRequestsAndLoop();
+}
+
 // The handler aborts the CONNECT on the first buffered stream, which would
 // destroy the stream the drain loop is walking.  The rest get rejected.
 TEST_P(HQDownstreamSessionTestWebTransport,

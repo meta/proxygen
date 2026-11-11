@@ -8,11 +8,66 @@
 
 #include <proxygen/lib/http/session/HQStreamDispatcher.h>
 
+#include <algorithm>
+
 using namespace proxygen;
 
 HQStreamDispatcherBase::HQStreamDispatcherBase(
     CallbackBase& callback, proxygen::TransportDirection direction)
     : callback_(callback), direction_(direction) {
+}
+
+void HQStreamDispatcherBase::holdWTStream(quic::StreamId id,
+                                          quic::StreamId sessionId,
+                                          std::chrono::milliseconds timeout) {
+  takeOwnership(id, timeout);
+  pendingStreams_.at(id).wtSessionId = sessionId;
+}
+
+bool HQStreamDispatcherBase::hasHeldWTStreams(quic::StreamId sessionId) const {
+  return std::any_of(
+      pendingStreams_.begin(), pendingStreams_.end(), [&](const auto& pending) {
+        return pending.second.wtSessionId == sessionId;
+      });
+}
+
+std::vector<quic::StreamId> HQStreamDispatcherBase::releaseHeldWTStreams(
+    folly::Optional<quic::StreamId> sessionId) {
+  std::vector<quic::StreamId> ids;
+  for (const auto& [id, pending] : pendingStreams_) {
+    if (pending.wtSessionId &&
+        (!sessionId || *pending.wtSessionId == *sessionId)) {
+      ids.push_back(id);
+    }
+  }
+  std::sort(ids.begin(), ids.end());
+  for (auto id : ids) {
+    releaseOwnership(id);
+  }
+  return ids;
+}
+
+void HQStreamDispatcherBase::dispatchTimeoutExpired(quic::StreamId id) {
+  const auto wtSessionId = pendingStreams_.at(id).wtSessionId;
+  releaseOwnership(id);
+  if (wtSessionId) {
+    LOG(ERROR) << "WT stream buffer timeout streamID=" << id
+               << " wt-sess-id=" << *wtSessionId;
+    callback_.rejectHeldWTStream(id);
+  } else {
+    callback_.rejectStream(id);
+  }
+}
+
+void HQStreamDispatcherBase::cleanup() {
+  for (auto& pendingStream : pendingStreams_) {
+    if (pendingStream.second.wtSessionId) {
+      callback_.rejectHeldWTStream(pendingStream.first);
+    } else {
+      callback_.rejectStream(pendingStream.first);
+    }
+  }
+  pendingStreams_.clear();
 }
 
 void HQStreamDispatcherBase::peekError(quic::StreamId id,

@@ -15,6 +15,8 @@
 
 #include <folly/io/async/EventBase.h>
 
+#include <vector>
+
 namespace proxygen {
 
 // Base class for the unidirectional stream callbacks
@@ -34,6 +36,11 @@ class HQStreamDispatcherBase : public quic::QuicSocket::PeekCallback {
 
     // Called by the dispatcher when a stream can not be recognized
     virtual void rejectStream(quic::StreamId /* id */) = 0;
+
+    // Called by the dispatcher when a held WT stream times out or is cleaned up
+    virtual void rejectHeldWTStream(quic::StreamId id) {
+      rejectStream(id);
+    }
 
    protected:
     virtual ~CallbackBase() = default;
@@ -55,11 +62,7 @@ class HQStreamDispatcherBase : public quic::QuicSocket::PeekCallback {
   // The ownership is released when the stream is passed
   // to the callback
   void takeTemporaryOwnership(quic::StreamId id) {
-    auto res = pendingStreams_.emplace(std::piecewise_construct,
-                                       std::forward_as_tuple(id),
-                                       std::forward_as_tuple(*this, id));
-    callback_.getEventBase()->timer().scheduleTimeout(
-        &res.first->second, callback_.getDispatchTimeout());
+    takeOwnership(id, callback_.getDispatchTimeout());
   }
 
   bool hasOwnership(quic::StreamId id) const {
@@ -74,6 +77,19 @@ class HQStreamDispatcherBase : public quic::QuicSocket::PeekCallback {
     return id;
   }
 
+  // The dispatcher stays the peek callback of a held stream, so that the
+  // transport keeps any FIN or reset. The stream is rejected after the timeout.
+  void holdWTStream(quic::StreamId id,
+                    quic::StreamId sessionId,
+                    std::chrono::milliseconds timeout);
+
+  bool hasHeldWTStreams(quic::StreamId sessionId) const;
+
+  // Releases the WT streams held for sessionId, or all of them if it is unset,
+  // in stream id order
+  std::vector<quic::StreamId> releaseHeldWTStreams(
+      folly::Optional<quic::StreamId> sessionId);
+
   size_t numberOfStreams() const {
     return pendingStreams_.size();
   }
@@ -84,18 +100,19 @@ class HQStreamDispatcherBase : public quic::QuicSocket::PeekCallback {
     }
   }
 
-  void dispatchTimeoutExpired(quic::StreamId id) {
-    callback_.rejectStream(releaseOwnership(id));
-  }
+  void dispatchTimeoutExpired(quic::StreamId id);
 
-  void cleanup() {
-    for (auto& pendingStream : pendingStreams_) {
-      callback_.rejectStream(pendingStream.first);
-    }
-    pendingStreams_.clear();
-  }
+  void cleanup();
 
  private:
+  void takeOwnership(quic::StreamId id, std::chrono::milliseconds timeout) {
+    auto res = pendingStreams_.emplace(std::piecewise_construct,
+                                       std::forward_as_tuple(id),
+                                       std::forward_as_tuple(*this, id));
+    callback_.getEventBase()->timer().scheduleTimeout(&res.first->second,
+                                                      timeout);
+  }
+
   class DispatchTimeout : public folly::HHWheelTimer::Callback {
    public:
     explicit DispatchTimeout(HQStreamDispatcherBase& dispatcher,
@@ -107,6 +124,9 @@ class HQStreamDispatcherBase : public quic::QuicSocket::PeekCallback {
     void timeoutExpired() noexcept override {
       dispatcher_.dispatchTimeoutExpired(id_);
     }
+
+    // Only set for a WebTransport stream held until its session is ready
+    folly::Optional<quic::StreamId> wtSessionId;
 
    private:
     HQStreamDispatcherBase& dispatcher_;
