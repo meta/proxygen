@@ -207,7 +207,6 @@ void HQSession::onNewBidirectionalStream(quic::StreamId id) noexcept {
   DCHECK(!hqStream);
   if (advertisedWebTransport()) {
     bidirectionalReadDispatcher_.takeTemporaryOwnership(id);
-    sock_->setPeekCallback(id, &bidirectionalReadDispatcher_);
   } else {
     dispatchRequestStreamImpl(id);
   }
@@ -218,7 +217,6 @@ void HQSession::dispatchRequestStream(quic::StreamId id) {
     LOG(ERROR) << "Bad socket sess=" << *this;
     return;
   }
-  sock_->setPeekCallback(id, nullptr);
   dispatchRequestStreamImpl(id);
 }
 
@@ -266,7 +264,6 @@ void HQSession::onNewUnidirectionalStream(quic::StreamId id) noexcept {
   // preface yet
   // Assign the stream to the dispatcher
   unidirectionalReadDispatcher_.takeTemporaryOwnership(id);
-  sock_->setPeekCallback(id, &unidirectionalReadDispatcher_);
 }
 
 void HQSession::onStopSending(quic::StreamId id,
@@ -1405,7 +1402,6 @@ void HQSession::dispatchControlStream(quic::StreamId id,
   sock_->setControlStream(id);
 
   // After reading the preface we can switch to the regular readCallback
-  sock_->setPeekCallback(id, nullptr);
   sock_->setReadCallback(id, &controlStreamReadCallback_);
 
   // The transport will send notifications via the read callback
@@ -3478,9 +3474,7 @@ void HQSession::deliverWTStream(HQStreamTransportBase* connectStream,
                                 quic::StreamId streamID) {
   DCHECK(connectStream);
   if (connectStream->wtSess_) {
-    if (connectStream->wtSess_->acquireIngressStream(streamID)) {
-      sock_->setPeekCallback(streamID, nullptr);
-    } else {
+    if (!connectStream->wtSess_->acquireIngressStream(streamID)) {
       rejectStream(streamID);
     }
     return;
@@ -3500,7 +3494,6 @@ void HQSession::deliverWTStream(HQStreamTransportBase* connectStream,
   if (readHandle && readHandle->readCallbackRegistered()) {
     sock_->setReadCallback(streamID, readHandle);
   }
-  sock_->setPeekCallback(streamID, nullptr);
 }
 
 // Peer initiated Uni WT streams

@@ -2690,7 +2690,6 @@ void HTTPQuicCoroSession::onNewBidirectionalStream(quic::StreamId id) noexcept {
                                          codec->getIngressSettings(),
                                          codec->getEgressSettings())) {
       bidiStreamDispatcher_.takeTemporaryOwnership(id);
-      quicSocket_->setPeekCallback(id, &bidiStreamDispatcher_);
     } else {
       XLOG(DBG4) << "Refusing server-init bidi id=" << id << " sess=" << *this;
       egressResetStream(id, nullptr, HTTPErrorCode::STREAM_CREATION_ERROR);
@@ -2715,7 +2714,6 @@ void HTTPQuicCoroSession::onNewUnidirectionalStream(
   XLOG(DBG4) << "New uni stream=" << id << " sess=" << *this;
   resetIdleTimeout();
   uniStreamDispatcher_.takeTemporaryOwnership(id);
-  quicSocket_->setPeekCallback(id, &uniStreamDispatcher_);
 }
 
 void HTTPQuicCoroSession::onStopSending(
@@ -2863,7 +2861,6 @@ void HTTPQuicCoroSession::dispatchControlStream(
   }
   XLOG(DBG4) << "Dispatching uni stream=" << id << " sess=" << *this;
   quicSocket_->consume(id, toConsume);
-  quicSocket_->setPeekCallback(id, nullptr);
   co_withExecutor(&readExec_,
                   readControlStream(id, *controlCodec, isQPACKEncoder))
       .start();
@@ -2876,7 +2873,6 @@ void HTTPQuicCoroSession::dispatchPushStream(quic::StreamId id,
   XLOG_IF(WARNING, isDownstream())
       << "PUSH stream received on server, id=" << id << " sess=" << *this;
   quicSocket_->consume(id, toConsume);
-  quicSocket_->setPeekCallback(id, nullptr);
   dispatchPushStream(id, pushId);
 }
 
@@ -2974,7 +2970,6 @@ void HTTPQuicCoroSession::dispatchWTStream(quic::StreamId streamId,
                                            size_t toConsume) {
   XLOG(DBG4) << __func__ << " id=" << streamId << " wt-sess-id=" << sessionId
              << " sess=" << *this;
-  quicSocket_->setPeekCallback(streamId, nullptr);
   // the dispatcher decoded the wt stream preface & session id but left the
   // bytes on the stream
   auto consumeRes = quicSocket_->consume(streamId, toConsume);

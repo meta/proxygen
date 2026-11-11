@@ -102,6 +102,10 @@ class MockDispatcher
     return std::chrono::seconds(1);
   }
 
+  quic::QuicSocket* getQuicSocket() const override {
+    return &socket_;
+  }
+
   MOCK_METHOD(void, dispatchPushStream, (quic::StreamId, hq::PushId, size_t));
   MOCK_METHOD(void,
               dispatchUniWTStream,
@@ -125,6 +129,7 @@ class MockDispatcher
               dispatchBidiWTStream,
               (quic::StreamId, quic::StreamId, size_t));
   folly::EventBase* evb_{nullptr};
+  mutable NiceMock<quic::MockQuicSocket> socket_;
 };
 
 template <typename T>
@@ -315,6 +320,18 @@ TEST_F(UnidirectionalReadDispatcherTest, TestRejectUnrecognizedPreface) {
   sendData(expectedId,
            static_cast<uint64_t>(hq::UnidirectionalStreamType::CONTROL),
            atLeastBytes);
+}
+
+TEST_F(UnidirectionalReadDispatcherTest, TestPeekCallbackFollowsOwnership) {
+  quic::StreamId id = 5;
+  EXPECT_CALL(
+      dispatcherCallback_.socket_,
+      setPeekCallback(
+          id, static_cast<quic::QuicSocket::PeekCallback*>(&dispatcher_)));
+  dispatcher_.takeTemporaryOwnership(id);
+
+  EXPECT_CALL(dispatcherCallback_.socket_, setPeekCallback(id, nullptr));
+  dispatcher_.releaseOwnership(id);
 }
 
 TEST_F(BidirectionalReadDispatcherTest, TestDispatchRequest) {

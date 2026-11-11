@@ -31,6 +31,8 @@ class HQStreamDispatcherBase : public quic::QuicSocket::PeekCallback {
 
     [[nodiscard]] virtual folly::EventBase* getEventBase() const = 0;
 
+    [[nodiscard]] virtual quic::QuicSocket* getQuicSocket() const = 0;
+
     [[nodiscard]] virtual std::chrono::milliseconds getDispatchTimeout()
         const = 0;
 
@@ -58,9 +60,8 @@ class HQStreamDispatcherBase : public quic::QuicSocket::PeekCallback {
   void peekError(quic::StreamId /* id */, quic::QuicError
                  /* error */) noexcept override;
 
-  // Take the temporary ownership of the stream.
-  // The ownership is released when the stream is passed
-  // to the callback
+  // Take the temporary ownership of the stream, as its peek callback.
+  // The ownership is released when the stream is passed to the callback
   void takeTemporaryOwnership(quic::StreamId id) {
     takeOwnership(id, callback_.getDispatchTimeout());
   }
@@ -74,6 +75,9 @@ class HQStreamDispatcherBase : public quic::QuicSocket::PeekCallback {
         << "Can not release ownership on unowned streamID=" << id;
     bool found = pendingStreams_.erase(id);
     LOG_IF(DFATAL, !found) << "Inconstency detected streamID=" << id;
+    if (auto* sock = callback_.getQuicSocket()) {
+      sock->setPeekCallback(id, nullptr);
+    }
     return id;
   }
 
@@ -111,6 +115,9 @@ class HQStreamDispatcherBase : public quic::QuicSocket::PeekCallback {
                                        std::forward_as_tuple(*this, id));
     callback_.getEventBase()->timer().scheduleTimeout(&res.first->second,
                                                       timeout);
+    if (auto* sock = callback_.getQuicSocket()) {
+      sock->setPeekCallback(id, this);
+    }
   }
 
   class DispatchTimeout : public folly::HHWheelTimer::Callback {

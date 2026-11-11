@@ -1065,6 +1065,9 @@ class HTTPQuicCoroSession final
   std::chrono::milliseconds getDispatchTimeout() const override {
     return streamReadTimeout_;
   }
+  quic::QuicSocket* getQuicSocket() const override {
+    return quicSocket_.get();
+  }
 
   std::shared_ptr<WebTransport> createWebTransport(
       HTTPCodec::StreamID connectStreamId,
