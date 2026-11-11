@@ -64,7 +64,6 @@ proxygen_add_library(proxygen_http_session_server
   DEPS
     proxygen_http_session_http_session_codec_factory
     Folly::folly_conv
-    Folly::folly_io_iobuf
     glog::glog
   EXPORTED_DEPS
     proxygen_error
@@ -75,6 +74,7 @@ proxygen_add_library(proxygen_http_session_server
     proxygen_services_http_acceptor
     proxygen_utils_shared_wheel_timer
     Folly::folly_io_async_async_ssl_socket
+    Folly::folly_io_iobuf
     Folly::folly_range
 )
 
