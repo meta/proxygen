@@ -17,6 +17,7 @@
 #include <folly/tracing/ScopedTraceSection.h>
 #include <memory>
 #include <proxygen/lib/http/HTTPHeaderSize.h>
+#include <proxygen/lib/http/HTTPPriorityFunctions.h>
 #include <proxygen/lib/http/codec/HTTP2Codec.h>
 #include <proxygen/lib/http/codec/HTTPChecks.h>
 #include <proxygen/lib/http/session/HTTPSessionController.h>
@@ -47,6 +48,9 @@ static const uint32_t kMaxWritesPerLoop = 32;
 } // anonymous namespace
 
 namespace proxygen {
+
+using PriorityEventSource =
+    HTTPTransactionObserverInterface::TxnPriorityEvent::Source;
 
 HTTPSession::HTTPSession(folly::HHWheelTimer* wheelTimer,
                          AsyncTransport::UniquePtr sock,
@@ -658,6 +662,15 @@ void HTTPSession::onHeadersComplete(HTTPCodec::StreamID streamID,
           [&event](auto observer, auto observed) {
             observer->requestStarted(observed, event);
           });
+      // The session does not schedule by priority; report the request's
+      // Priority header as requested but not applied.
+      if (txn->hasPriorityEventObservers()) {
+        if (const auto requestedPriority = httpPriorityFromHTTPMessage(*msg)) {
+          txn->onPriorityChange(*requestedPriority,
+                                PriorityEventSource::REQUEST_HEADER,
+                                false /* applied */);
+        }
+      }
     }
   }
 
@@ -1028,11 +1041,19 @@ void HTTPSession::onSettingsAck() {
 }
 
 void HTTPSession::onPriority(HTTPCodec::StreamID streamID,
-                             const HTTPPriority&) {
+                             const HTTPPriority& pri) {
   if (getNumIncomingStreams() >= codec_.getEgressSettings()->getSetting(
                                      SettingsId::MAX_CONCURRENT_STREAMS,
                                      std::numeric_limits<int32_t>::max())) {
     invalidStream(streamID, ErrorCode::PROTOCOL_ERROR);
+    return;
+  }
+  // The session does not schedule by priority, so observers see the update
+  // as requested but not applied. An update for a stream without a
+  // transaction yet is dropped, as the session keeps no priority state.
+  if (auto* txn = findTransaction(streamID)) {
+    txn->onPriorityChange(
+        pri, PriorityEventSource::PRIORITY_UPDATE, false /* applied */);
   }
 }
 

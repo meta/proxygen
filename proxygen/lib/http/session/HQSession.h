@@ -1458,9 +1458,11 @@ class HQSession
     bool hasPendingEOM() const;
     bool hasPendingEgress() const;
 
-    void setPriority(quic::QuicSocket& sock,
-                     quic::StreamId id,
-                     proxygen::HTTPPriority pri);
+    void setPriority(
+        quic::QuicSocket& sock,
+        quic::StreamId id,
+        proxygen::HTTPPriority pri,
+        HTTPTransactionObserverInterface::TxnPriorityEvent::Source source);
     /**
      * Adapter class for managing different enqueued state between
      * HTTPTransaction and HQStreamTransport.  The decouples whether the

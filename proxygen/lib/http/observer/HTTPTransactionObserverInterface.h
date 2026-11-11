@@ -26,6 +26,7 @@ class HTTPTransactionObserverInterface {
 
   enum class Events {
     TxnBytes = 1,
+    TxnPriority = 2,
   };
 
   struct TxnBytesEvent {
@@ -118,8 +119,52 @@ class HTTPTransactionObserverInterface {
     explicit TxnBytesEvent(const BuilderFields& builderFields);
   };
 
+  /**
+   * A new HTTP priority for the transaction: one the session applied to
+   * egress scheduling, or one the peer requested that the session did not
+   * apply (see `applied`).
+   */
+  struct TxnPriorityEvent {
+    // What the applied priority came from.
+    enum class Source : uint8_t {
+      // The Priority header of the request message.
+      REQUEST_HEADER,
+      // The Priority header of a response message.
+      RESPONSE_HEADER,
+      // A PRIORITY_UPDATE frame that arrived before the request headers,
+      // applied once they arrived. It overrides the request header.
+      BUFFERED_PRIORITY_UPDATE,
+      // A PRIORITY_UPDATE frame that arrived after the request headers.
+      PRIORITY_UPDATE,
+      // The local application (`HTTPTransaction::updateAndSendPriority`).
+      LOCAL,
+    };
+
+    TxnPriorityEvent(const proxygen::TimePoint& timestampIn,
+                     const HTTPPriority& priorityIn,
+                     Source sourceIn,
+                     bool appliedIn)
+        : timestamp(timestampIn),
+          priority(priorityIn),
+          source(sourceIn),
+          applied(appliedIn) {
+    }
+
+    proxygen::TimePoint timestamp;
+    HTTPPriority priority;
+    Source source;
+    // Whether the session applied `priority` to egress scheduling. False
+    // means the peer requested this priority and the session did not apply
+    // it: `HTTPSession` (HTTP/1.x and HTTP/2) does not schedule by priority.
+    bool applied;
+  };
+
   virtual void onBytesEvent(HTTPTransactionObserverAccessor* /* txn */,
                             const TxnBytesEvent& /* event */) noexcept {
+  }
+
+  virtual void onPriorityEvent(HTTPTransactionObserverAccessor* /* txn */,
+                               const TxnPriorityEvent& /* event */) noexcept {
   }
 };
 

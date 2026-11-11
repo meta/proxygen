@@ -1946,6 +1946,27 @@ bool HTTPTransaction::hasBytesEventObservers() {
       HTTPTransactionObserverInterface::Events::TxnBytes>();
 }
 
+bool HTTPTransaction::hasPriorityEventObservers() {
+  return txnObserverContainer_.hasObserversForEvent<
+      HTTPTransactionObserverInterface::Events::TxnPriority>();
+}
+
+void HTTPTransaction::onPriorityChange(
+    const HTTPPriority& priority,
+    HTTPTransactionObserverInterface::TxnPriorityEvent::Source source,
+    bool applied) {
+  if (!hasPriorityEventObservers()) {
+    return;
+  }
+  const HTTPTransactionObserverInterface::TxnPriorityEvent event(
+      proxygen::SteadyClock::now(), priority, source, applied);
+  txnObserverContainer_.invokeInterfaceMethod<
+      HTTPTransactionObserverInterface::Events::TxnPriority>(
+      [&event](auto observer, auto observed) {
+        observer->onPriorityEvent(observed, event);
+      });
+}
+
 void HTTPTransaction::emitBytesEvent(const TxnBytesEvent& event) {
   txnObserverContainer_.invokeInterfaceMethod<
       HTTPTransactionObserverInterface::Events::TxnBytes>(

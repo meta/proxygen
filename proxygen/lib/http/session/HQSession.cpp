@@ -156,6 +156,9 @@ using namespace proxygen::hq;
 
 namespace proxygen {
 
+using PriorityEventSource =
+    HTTPTransactionObserverInterface::TxnPriorityEvent::Source;
+
 const std::string kH3FBCurrentDraft("h3-fb-05");
 const std::string kH3AliasV1("h3-alias-01");
 const std::string kH3AliasV2("h3-alias-02");
@@ -670,7 +673,7 @@ size_t HQSession::sendPriority(HTTPCodec::StreamID id, HTTPPriority priority) {
     return 0;
   }
   if (enableEgressPrioritization_) {
-    stream->setPriority(*sock_, id, priority);
+    stream->setPriority(*sock_, id, priority, PriorityEventSource::LOCAL);
   }
   // PRIORITY_UPDATE frames are sent by clients on the control stream.
   // Servers do not send PRIORITY_UPDATE
@@ -1715,7 +1718,8 @@ void HQSession::onPriority(quic::StreamId streamId, const HTTPPriority& pri) {
     return;
   }
   if (enableEgressPrioritization_) {
-    stream->setPriority(*sock_, streamId, pri);
+    stream->setPriority(
+        *sock_, streamId, pri, PriorityEventSource::PRIORITY_UPDATE);
   }
 }
 
@@ -2575,12 +2579,14 @@ bool HQSession::HQStreamTransportBase::processReadData() {
 
 void HQSession::HQStreamTransportBase::setPriority(quic::QuicSocket& sock,
                                                    quic::StreamId streamId,
-                                                   proxygen::HTTPPriority pri) {
+                                                   proxygen::HTTPPriority pri,
+                                                   PriorityEventSource source) {
   auto httpPri = toQuicPriority(pri);
   sock.setStreamPriority(streamId, httpPri);
   queueHandle_.setPriority(httpPri);
   auto id = quic::PriorityQueue::Identifier::fromStreamID(streamId);
   session_.httpPriorityQueue_.updateIfExist(id, toQuicPriority(pri));
+  txn_.onPriorityChange(pri, source, true /* applied */);
 }
 
 // This method can be invoked via several paths:
@@ -2666,9 +2672,16 @@ void HQSession::HQStreamTransportBase::onHeadersComplete(
     const auto httpPriority = httpPriorityFromHTTPMessage(*msg);
     auto itr = session_.priorityUpdatesBuffer_.find(streamId);
     if (itr != session_.priorityUpdatesBuffer_.end()) {
-      setPriority(*sock, streamId, itr->second);
+      setPriority(*sock,
+                  streamId,
+                  itr->second,
+                  PriorityEventSource::BUFFERED_PRIORITY_UPDATE);
     } else if (httpPriority) {
-      setPriority(*sock, streamId, httpPriority.value());
+      setPriority(*sock,
+                  streamId,
+                  httpPriority.value(),
+                  msg->isRequest() ? PriorityEventSource::REQUEST_HEADER
+                                   : PriorityEventSource::RESPONSE_HEADER);
     }
     if (httpPriority) {
       requiredBps_ = httpPriority->requiredBps;
@@ -2782,7 +2795,11 @@ void HQSession::HQStreamTransportBase::updatePriority(
   auto streamId = getStreamId();
   auto httpPriority = httpPriorityFromHTTPMessage(headers);
   if (sock && httpPriority && session_.enableEgressPrioritization_) {
-    setPriority(*sock, streamId, httpPriority.value());
+    setPriority(*sock,
+                streamId,
+                httpPriority.value(),
+                headers.isRequest() ? PriorityEventSource::REQUEST_HEADER
+                                    : PriorityEventSource::RESPONSE_HEADER);
   }
 }
 

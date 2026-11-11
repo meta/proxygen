@@ -22,8 +22,10 @@ proxygen_add_library(proxygen_http_observer_session_observer_interface
 
 proxygen_add_library(proxygen_http_observer_http_transaction_observer_container
   EXPORTED_DEPS
+    proxygen_http_message
     proxygen_http_observer_http_transaction_observer_interface
     Folly::folly_observer_container
+    Folly::folly_optional
 )
 
 proxygen_add_library(proxygen_http_observer_http_transaction_observer_interface

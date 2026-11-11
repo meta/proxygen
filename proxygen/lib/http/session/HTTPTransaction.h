@@ -944,6 +944,19 @@ class HTTPTransaction
   void onEgressTimeout();
 
   /**
+   * Invoked by the session when it applies a new priority to this
+   * transaction (`applied`), or when the peer requests one the session does
+   * not apply; notifies `TxnPriority` observers.
+   */
+  void onPriorityChange(
+      const HTTPPriority& priority,
+      HTTPTransactionObserverInterface::TxnPriorityEvent::Source source,
+      bool applied);
+
+  // Whether any observer subscribes to `TxnPriority` events.
+  bool hasPriorityEventObservers();
+
+  /**
    * Invoked by the session when the first header byte is flushed.
    */
   void onEgressHeaderFirstByte();
@@ -1770,6 +1783,11 @@ class HTTPTransaction
 
     [[nodiscard]] uint64_t getTxnId() const override {
       return txn_->getID();
+    }
+
+    [[nodiscard]] folly::Optional<HTTPPriority> getHTTPPriority()
+        const override {
+      return txn_->getHTTPPriority();
     }
 
    private:

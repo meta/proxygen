@@ -18,6 +18,7 @@
 #include <proxygen/lib/http/session/test/HQDownstreamSessionTest.h>
 #include <proxygen/lib/http/session/test/HTTPSessionMocks.h>
 #include <proxygen/lib/http/session/test/HTTPTransactionMocks.h>
+#include <proxygen/lib/http/session/test/MockHTTPTransactionObserver.h>
 #include <proxygen/lib/http/session/test/MockQuicSocketDriver.h>
 #include <proxygen/lib/http/session/test/MockSessionObserver.h>
 #include <proxygen/lib/http/webtransport/test/Mocks.h>
@@ -472,6 +473,112 @@ TEST_P(HQDownstreamSessionTest, OnPriorityCallback) {
   flushRequestsAndLoop();
   // Priority on a stream we can't find - no-op
   hqSession_->onPriority(id, HTTPPriority(4, true));
+  hqSession_->closeWhenIdle();
+}
+
+namespace {
+
+using TxnPriorityEvent = HTTPTransactionObserverInterface::TxnPriorityEvent;
+
+// HQ applies every priority it reports.
+auto priorityEventIs(TxnPriorityEvent::Source source,
+                     const HTTPPriority& priority) {
+  return AllOf(Field(&TxnPriorityEvent::source, source),
+               Field(&TxnPriorityEvent::priority, priority),
+               Field(&TxnPriorityEvent::applied, true));
+}
+
+// Attaches a TxnPriority observer to the transaction when the request starts,
+// before the session applies the request's initial priority.
+std::shared_ptr<MockHTTPTransactionObserver>
+attachTxnPriorityObserverOnRequestStarted(
+    MockSessionObserver& sessionObserver) {
+  auto txnObserver = std::make_shared<NiceMock<MockHTTPTransactionObserver>>(
+      MockHTTPTransactionObserver::EventSetBuilder()
+          .enable(HTTPTransactionObserverInterface::Events::TxnPriority)
+          .build());
+  EXPECT_CALL(sessionObserver, requestStarted(_, _))
+      .WillOnce(
+          [txnObserver](
+              HTTPSessionObserverAccessor*,
+              const HTTPSessionObserverInterface::RequestStartedEvent& event) {
+            EXPECT_TRUE(event.txnObserverAccessor->addObserver(txnObserver));
+          });
+  return txnObserver;
+}
+
+} // namespace
+
+TEST_P(HQDownstreamSessionTest, Observer_TxnPriorityEvents) {
+  using Source = TxnPriorityEvent::Source;
+  auto sessionObserver = addMockSessionObserver(
+      MockSessionObserver::EventSetBuilder()
+          .enable(HTTPSessionObserverInterface::Events::RequestStarted)
+          .build());
+  auto txnObserver =
+      attachTxnPriorityObserverOnRequestStarted(*sessionObserver);
+  {
+    InSequence enforceOrder;
+    EXPECT_CALL(
+        *txnObserver,
+        onPriorityEvent(
+            _, priorityEventIs(Source::REQUEST_HEADER, HTTPPriority(1, true))));
+    EXPECT_CALL(*txnObserver,
+                onPriorityEvent(_,
+                                priorityEventIs(Source::PRIORITY_UPDATE,
+                                                HTTPPriority(2, true))));
+    EXPECT_CALL(*txnObserver,
+                onPriorityEvent(
+                    _, priorityEventIs(Source::LOCAL, HTTPPriority(5, false))));
+    EXPECT_CALL(*txnObserver,
+                onPriorityEvent(_,
+                                priorityEventIs(Source::RESPONSE_HEADER,
+                                                HTTPPriority(6, false))));
+  }
+  auto id = sendRequest(getProgressiveGetRequest());
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&]() {
+    hqSession_->onPriority(id, HTTPPriority(2, true));
+    handler->txn_->updateAndSendPriority(HTTPPriority(5, false));
+  });
+  handler->expectEOM([&]() {
+    auto resp = makeResponse(200, 0);
+    std::get<0>(resp)->getHeaders().add(HTTP_HEADER_PRIORITY, "u=6");
+    handler->sendRequest(*std::get<0>(resp));
+  });
+  handler->expectDetachTransaction();
+  flushRequestsAndLoop();
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTest, Observer_TxnPriorityEventBufferedUpdate) {
+  auto sessionObserver = addMockSessionObserver(
+      MockSessionObserver::EventSetBuilder()
+          .enable(HTTPSessionObserverInterface::Events::RequestStarted)
+          .build());
+  auto txnObserver =
+      attachTxnPriorityObserverOnRequestStarted(*sessionObserver);
+  // The buffered PRIORITY_UPDATE overrides the request's Priority header.
+  EXPECT_CALL(
+      *txnObserver,
+      onPriorityEvent(
+          _,
+          priorityEventIs(TxnPriorityEvent::Source::BUFFERED_PRIORITY_UPDATE,
+                          HTTPPriority(3, false))));
+  hqSession_->onPriority(0, HTTPPriority(3, false));
+  auto id = sendRequest(getProgressiveGetRequest());
+  EXPECT_EQ(id, 0);
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders();
+  handler->expectEOM([&]() {
+    handler->sendReplyWithBody(200 /* status code */,
+                               100 /* content size */,
+                               true /* keepalive */,
+                               true /* sendEOM */,
+                               false /* trailers */);
+  });
+  handler->expectDetachTransaction();
+  flushRequestsAndLoop();
   hqSession_->closeWhenIdle();
 }
 

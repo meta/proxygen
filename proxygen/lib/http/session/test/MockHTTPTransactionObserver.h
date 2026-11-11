@@ -32,6 +32,10 @@ class MockHTTPTransactionObserver
               onBytesEvent,
               (HTTPTransactionObserverAccessor*, const TxnBytesEvent&),
               (noexcept));
+  MOCK_METHOD(void,
+              onPriorityEvent,
+              (HTTPTransactionObserverAccessor*, const TxnPriorityEvent&),
+              (noexcept));
 };
 
 class MockHTTPTransactionObserverAccessor

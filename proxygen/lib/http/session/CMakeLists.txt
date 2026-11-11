@@ -12,6 +12,7 @@ proxygen_add_library(proxygen_http_session_session
     HTTPSessionBase.cpp
   DEPS
     proxygen_http_codec_http1x_codec
+    proxygen_http_priority_functions
     proxygen_http_session_stats
     proxygen_http_webtransport_httpwebtransport
     proxygen_http_webtransport_webtransport_session

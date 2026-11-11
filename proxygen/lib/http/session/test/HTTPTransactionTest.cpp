@@ -8,9 +8,11 @@
 
 #include <chrono>
 #include <cstdint>
+#include <folly/Optional.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
+#include <memory>
 #include <proxygen/lib/http/session/ByteEvents.h>
 #include <proxygen/lib/http/session/HTTP2PriorityQueue.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>
@@ -122,6 +124,69 @@ TEST_F(HTTPTransactionObservabilityTest, ObserverAttachedDestroyedSharedPtr) {
   auto observer = addMockTxnObserverShared(eventSet);
   EXPECT_CALL(*observer, destroyed(txn_->getObserverAccessor(), _));
   txn_ = nullptr;
+}
+
+TEST_F(HTTPTransactionObservabilityTest, ObserverAccessorReturnsHTTPPriority) {
+  const HTTPPriority initialPriority(1 /* urgency */,
+                                     false /* incremental */,
+                                     7 /* orderId */,
+                                     true /* paused */,
+                                     1000 /* requiredBps */);
+  const HTTPPriority updatedPriority(5 /* urgency */, true /* incremental */);
+  EXPECT_CALL(transport_, getHTTPPriority())
+      .WillOnce(Return(initialPriority))
+      .WillOnce(Return(updatedPriority))
+      .WillOnce(Return(folly::none));
+
+  const auto* accessor = txn_->getObserverAccessor();
+  EXPECT_EQ(accessor->getHTTPPriority(), initialPriority);
+  EXPECT_EQ(accessor->getHTTPPriority(), updatedPriority);
+  EXPECT_EQ(accessor->getHTTPPriority(), folly::none);
+}
+
+TEST_F(HTTPTransactionObservabilityTest,
+       OnPriorityChange_NotifiesOnlyTxnPriorityObservers) {
+  using TxnPriorityEvent = HTTPTransactionObserverInterface::TxnPriorityEvent;
+  auto bytesObserver = addMockTxnObserver(
+      MockHTTPTransactionObserver::EventSetBuilder()
+          .enable(MockHTTPTransactionObserver::Events::TxnBytes)
+          .build());
+  auto priorityObserver = addMockTxnObserver(
+      MockHTTPTransactionObserver::EventSetBuilder()
+          .enable(MockHTTPTransactionObserver::Events::TxnPriority)
+          .build());
+  EXPECT_CALL(*bytesObserver, onPriorityEvent(_, _)).Times(0);
+  EXPECT_CALL(
+      *priorityObserver,
+      onPriorityEvent(
+          Eq(txn_->getObserverAccessor()),
+          AllOf(Field(&TxnPriorityEvent::source,
+                      TxnPriorityEvent::Source::PRIORITY_UPDATE),
+                Field(&TxnPriorityEvent::priority, HTTPPriority(2, false)),
+                Field(&TxnPriorityEvent::applied, false))));
+  EXPECT_TRUE(txn_->hasPriorityEventObservers());
+  txn_->onPriorityChange(HTTPPriority(2, false),
+                         TxnPriorityEvent::Source::PRIORITY_UPDATE,
+                         false /* applied */);
+}
+
+TEST(HTTPTransactionObserverAccessorTest, DefaultHTTPPriorityIsNone) {
+  class TestAccessor : public HTTPTransactionObserverAccessor {
+   public:
+    bool addObserver(HTTPTransactionObserverContainer::Observer*) override {
+      return false;
+    }
+    bool addObserver(
+        std::shared_ptr<HTTPTransactionObserverContainer::Observer>) override {
+      return false;
+    }
+    [[nodiscard]] uint64_t getTxnId() const override {
+      return 0;
+    }
+  };
+
+  const TestAccessor accessor;
+  EXPECT_EQ(accessor.getHTTPPriority(), folly::none);
 }
 
 TEST_F(HTTPTransactionObservabilityTest,

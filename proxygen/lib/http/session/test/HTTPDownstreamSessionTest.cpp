@@ -30,6 +30,7 @@
 #include <proxygen/lib/http/session/test/HTTPTransactionMocks.h>
 #include <proxygen/lib/http/session/test/MockByteEventTracker.h>
 #include <proxygen/lib/http/session/test/MockHTTPSessionStats.h>
+#include <proxygen/lib/http/session/test/MockHTTPTransactionObserver.h>
 #include <proxygen/lib/http/session/test/MockSessionObserver.h>
 #include <proxygen/lib/http/session/test/TestUtils.h>
 #include <proxygen/lib/http/webtransport/test/Mocks.h>
@@ -3978,6 +3979,121 @@ TEST_F(HTTP2DownstreamSessionTest, Observer_RequestStarted) {
   sendRequest(req);
   flushRequestsAndLoop(true, milliseconds(0));
   EXPECT_EQ(actualTxnObserverAccessor, handler->txn_->getObserverAccessor());
+  expectDetachSession();
+}
+
+namespace {
+
+using TxnPriorityEvent = HTTPTransactionObserverInterface::TxnPriorityEvent;
+
+// HTTPSession does not schedule by priority, so every priority it reports is
+// requested, not applied.
+auto requestedPriorityEventIs(TxnPriorityEvent::Source source,
+                              const HTTPPriority& priority) {
+  return AllOf(Field(&TxnPriorityEvent::source, source),
+               Field(&TxnPriorityEvent::priority, priority),
+               Field(&TxnPriorityEvent::applied, false));
+}
+
+// Attaches a TxnPriority observer to the transaction when the request starts.
+std::shared_ptr<MockHTTPTransactionObserver>
+attachTxnPriorityObserverOnRequestStarted(
+    MockSessionObserver& sessionObserver) {
+  auto txnObserver = std::make_shared<NiceMock<MockHTTPTransactionObserver>>(
+      MockHTTPTransactionObserver::EventSetBuilder()
+          .enable(HTTPTransactionObserverInterface::Events::TxnPriority)
+          .build());
+  EXPECT_CALL(sessionObserver, requestStarted(_, _))
+      .WillOnce(
+          [txnObserver](
+              HTTPSessionObserverAccessor*,
+              const HTTPSessionObserverInterface::RequestStartedEvent& event) {
+            EXPECT_TRUE(event.txnObserverAccessor->addObserver(txnObserver));
+          });
+  return txnObserver;
+}
+
+// `http2::writeRFC9218Priority` frames everything already in its output
+// queue, so generate the frame into an empty queue and append it.
+void appendPriorityUpdate(HTTPCodec& codec,
+                          folly::IOBufQueue& requests,
+                          HTTPCodec::StreamID streamID,
+                          const HTTPPriority& priority) {
+  folly::IOBufQueue frame{folly::IOBufQueue::cacheChainLength()};
+  codec.generatePriority(frame, streamID, priority);
+  requests.append(frame.move());
+}
+
+} // namespace
+
+TEST_F(HTTP2DownstreamSessionTest, Observer_TxnPriorityEventsAreRequested) {
+  auto sessionObserver = addMockSessionObserver(
+      MockSessionObserver::EventSetBuilder()
+          .enable(HTTPSessionObserverInterface::Events::RequestStarted)
+          .build());
+  auto txnObserver =
+      attachTxnPriorityObserverOnRequestStarted(*sessionObserver);
+  {
+    InSequence enforceOrder;
+    EXPECT_CALL(*txnObserver,
+                onPriorityEvent(_,
+                                requestedPriorityEventIs(
+                                    TxnPriorityEvent::Source::REQUEST_HEADER,
+                                    HTTPPriority(1, false))));
+    EXPECT_CALL(*txnObserver,
+                onPriorityEvent(_,
+                                requestedPriorityEventIs(
+                                    TxnPriorityEvent::Source::PRIORITY_UPDATE,
+                                    HTTPPriority(5, true))));
+  }
+
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders();
+  handler->expectEOM([&handler]() {
+    // Neither the header nor the update changed egress scheduling.
+    const auto priority = handler->txn_->getPriority();
+    EXPECT_EQ(priority.streamDependency,
+              http2::DefaultPriority.streamDependency);
+    EXPECT_EQ(priority.exclusive, http2::DefaultPriority.exclusive);
+    EXPECT_EQ(priority.weight, http2::DefaultPriority.weight);
+    handler->sendReplyWithBody(200 /* status code */, 100 /* content size */);
+  });
+  handler->expectDetachTransaction();
+  HTTPSession::DestructorGuard g(httpSession_);
+  auto req = getGetRequest();
+  req.getHeaders().add(HTTP_HEADER_PRIORITY, "u=1");
+  const auto streamID = sendRequest(req, false /* eom */);
+  appendPriorityUpdate(
+      *clientCodec_, requests_, streamID, HTTPPriority(5, true));
+  clientCodec_->generateEOM(requests_, streamID);
+  flushRequestsAndLoop(true, milliseconds(0));
+  expectDetachSession();
+}
+
+TEST_F(HTTP2DownstreamSessionTest,
+       Observer_PriorityUpdateBeforeRequestIsDropped) {
+  auto sessionObserver = addMockSessionObserver(
+      MockSessionObserver::EventSetBuilder()
+          .enable(HTTPSessionObserverInterface::Events::RequestStarted)
+          .build());
+  auto txnObserver =
+      attachTxnPriorityObserverOnRequestStarted(*sessionObserver);
+  // The session keeps no priority state for streams without a transaction.
+  EXPECT_CALL(*txnObserver, onPriorityEvent(_, _)).Times(0);
+
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders();
+  handler->expectEOM([&handler]() {
+    handler->sendReplyWithBody(200 /* status code */, 100 /* content size */);
+  });
+  handler->expectDetachTransaction();
+  HTTPSession::DestructorGuard g(httpSession_);
+  appendPriorityUpdate(*clientCodec_,
+                       requests_,
+                       1 /* first client stream */,
+                       HTTPPriority(5, true));
+  EXPECT_EQ(sendRequest(getGetRequest()), 1);
+  flushRequestsAndLoop(true, milliseconds(0));
   expectDetachSession();
 }
 

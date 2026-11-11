@@ -9,6 +9,8 @@
 #pragma once
 
 #include <folly/ObserverContainer.h>
+#include <folly/Optional.h>
+#include <proxygen/lib/http/HTTPMessage.h>
 #include <proxygen/lib/http/observer/HTTPTransactionObserverInterface.h>
 
 namespace proxygen {
@@ -44,6 +46,14 @@ class HTTPTransactionObserverAccessor {
       std::shared_ptr<HTTPTransactionObserverContainer::Observer> observer) = 0;
 
   [[nodiscard]] virtual uint64_t getTxnId() const = 0;
+
+  /**
+   * Priority currently applied to the transaction by its transport, if the
+   * transport tracks one.
+   */
+  [[nodiscard]] virtual folly::Optional<HTTPPriority> getHTTPPriority() const {
+    return folly::none;
+  }
 };
 
 } // namespace proxygen
