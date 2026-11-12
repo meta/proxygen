@@ -59,6 +59,7 @@ struct WtWriteLooper
  private:
   // invoked when we need to egress an event on the underlying CONNECT stream
   void onEvent(detail::WtStreamManager::Event&&) noexcept override;
+  void onStreamActivity() noexcept override;
   void runLoopCallback() noexcept override;
 
   WebTransportTxnHandler& wtTxnHandler_;
@@ -69,6 +70,12 @@ struct WtWriteLooper
 void WtWriteLooper::onEvent(detail::WtStreamManager::Event&& event) noexcept {
   H3ConnectStreamCallback::onEvent(std::move(event));
   schedule();
+}
+
+void WtWriteLooper::onStreamActivity() noexcept {
+  if (auto* txn = wtTxnHandler_.txn_) {
+    txn->refreshTimeout();
+  }
 }
 
 void WtWriteLooper::runLoopCallback() noexcept {
@@ -105,8 +112,15 @@ HqWtSession::HqWtSession(WtLooper& readLooper,
 
 void HqWtSession::onHttpError(const HTTPException& err) noexcept {
   VLOG(4) << __func__ << "; err=" << err.describe();
+  auto ka = self;
   wtSess_.onCloseSession({WebTransport::kInternalError, err.describe()});
   WtHttpSession::onHttpError(err);
+  // An ingress-only error, such as the idle timeout, leaves the CONNECT stream
+  // open for egress.
+  if (auto* txn = std::exchange(txnHandler_.txn_, nullptr)) {
+    txn->setHandler(nullptr);
+    txn->sendAbort();
+  }
 }
 
 void HqWtSession::onDone() noexcept {

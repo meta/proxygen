@@ -219,6 +219,12 @@ void QuicWtSessionBase::installReadCallback(StreamId id) noexcept {
   }
 }
 
+void QuicWtSessionBase::noteStreamActivity() noexcept {
+  if (observer_) {
+    observer_->onStreamActivity();
+  }
+}
+
 bool QuicWtSessionBase::hasEgressUniCredit() const noexcept {
   return quicSocket_->getNumOpenableUnidirectionalStreams() &&
          sm_.canCreateUni();
@@ -339,6 +345,7 @@ void QuicWtSessionBase::QuicReadCallback::readAvailable(StreamId id) noexcept {
     return;
   }
   auto& [data, eof] = readRes.value();
+  sess.noteStreamActivity();
   if (eof) {
     quicSocket->setReadCallback(id, nullptr, std::nullopt);
   }
@@ -353,6 +360,7 @@ void QuicWtSessionBase::QuicReadCallback::readAvailable(StreamId id) noexcept {
 void QuicWtSessionBase::QuicReadCallback::readError(StreamId id,
                                                     QuicError error) noexcept {
   XLOG(DBG4) << __func__ << "; id=" << id << "; err=" << error;
+  sess.noteStreamActivity();
   sess.sm_.onResetStream(WtStreamManager::ResetStream{
       .streamId = id,
       .err = sess.fromTransportErrorCode(getQuicAppErrCode(error))});
@@ -393,6 +401,7 @@ void QuicWtSessionBase::StreamManagerCallback::eventsAvailableImpl() noexcept {
   // process control events first
   QuicWtEventVisitor visitor{*sock, sess.observer_, sess};
   auto events = sess.sm_.moveEvents();
+  bool active = !events.empty();
   for (auto& event : events) {
     std::visit(visitor, std::move(event));
   }
@@ -400,6 +409,7 @@ void QuicWtSessionBase::StreamManagerCallback::eventsAvailableImpl() noexcept {
   // then process writable streams
   auto& pq = *sess.priorityQueue_;
   while (!pq.empty()) {
+    active = true;
     const auto id = pq.getNextScheduledID(std::nullopt);
     XCHECK(id.isStreamID());
     const auto streamId = id.asStreamID();
@@ -429,6 +439,9 @@ void QuicWtSessionBase::StreamManagerCallback::eventsAvailableImpl() noexcept {
         sess.quicSocket_->notifyPendingWriteOnStream(streamId, &sess);
       }
     }
+  }
+  if (active) {
+    sess.noteStreamActivity();
   }
 }
 
@@ -679,6 +692,7 @@ void H3WtSession::writeWtFramePrefix(uint64_t id) noexcept {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeFn(writeBuf, connectStreamId_);
   XCHECK(quicSocket_->writeChain(id, writeBuf.move(), false));
+  noteStreamActivity();
 }
 
 auto H3WtSession::onConnMaxData(WtStreamManager::MaxConnData mcd) noexcept

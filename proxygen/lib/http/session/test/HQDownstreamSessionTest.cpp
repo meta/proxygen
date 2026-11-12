@@ -4269,6 +4269,51 @@ void queuePeerWTUniStream(MockQuicSocketDriver* driver,
 }
 } // namespace
 
+// WebTransport streams bypass the CONNECT stream, so their traffic has to
+// extend the CONNECT txn's idle timeout. Once the streams go quiet, the timeout
+// still ends the session.
+TEST_P(HQDownstreamSessionTestWebTransport, StreamActivityExtendsIdleTimeout) {
+  const quic::StreamId sessionId = 0;
+  const quic::StreamId wtStreamId = 14;
+
+  sendSettings();
+  HTTPMessage req;
+  req.setHTTPVersion(1, 1);
+  req.setUpgradeProtocol("webtransport");
+  req.setMethod(HTTPMethod::CONNECT);
+  req.setURL("/webtransport");
+  req.getHeaders().set(HTTP_HEADER_HOST, "www.facebook.com");
+  ASSERT_EQ(sendRequest(req, /*eom=*/false), sessionId);
+
+  auto wtHandler = proxygen::test::DummyWtHandler::make();
+  auto wtCtx = wtHandler->ctx;
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&]() {
+    HTTPMessage resp;
+    resp.setStatusCode(200);
+    handler->txn_->sendWtHeaders(resp, std::move(wtHandler));
+  });
+  handler->expectDetachTransaction();
+  flushRequestsAndLoopN(3);
+
+  // A byte every 100ms on a peer stream, for twice the idle timeout.
+  queuePeerWTUniStream(socketDriver_.get(), wtStreamId, sessionId, makeBuf(1));
+  for (int i = 0; i < 10; ++i) {
+    socketDriver_->addReadEvent(
+        wtStreamId, makeBuf(1), std::chrono::milliseconds(100));
+  }
+  bool endedDuringTraffic = true;
+  eventBase_.runAfterDelay([&] { endedDuringTraffic = wtCtx->err.has_value(); },
+                           2 * kTransactionTimeout - 50);
+  flushRequestsAndLoop();
+
+  EXPECT_FALSE(endedDuringTraffic);
+  EXPECT_TRUE(wtCtx->err.has_value());
+  EXPECT_TRUE(socketDriver_->streams_[sessionId].error.has_value());
+  hqSession_->closeWhenIdle();
+  flushRequestsAndLoop();
+}
+
 // A WT uni-stream that arrives before the matching CONNECT is buffered by the
 // session and delivered to the WT handler once the 200 response promotes the
 // CONNECT stream into a WT session.
