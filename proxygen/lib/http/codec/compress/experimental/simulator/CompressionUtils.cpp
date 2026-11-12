@@ -6,6 +6,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <string>
+
 #include <folly/container/Reserve.h>
 #include <proxygen/lib/http/codec/compress/experimental/simulator/CompressionUtils.h>
 
@@ -114,7 +116,7 @@ std::vector<compress::Header> prepareMessageForCompression(
           folly::split(';', value, cookiePieces);
           folly::grow_capacity_by(cookies, cookiePieces.size());
           for (auto cookie : cookiePieces) {
-            cookies.push_back(ltrimWhitespace(cookie).str());
+            cookies.push_back(std::string(ltrimWhitespace(cookie)));
             allHeaders.emplace_back(code, name, cookies.back());
           }
         } else if (code != HTTP_HEADER_HOST && (isPublic || name[0] != ':')) {
