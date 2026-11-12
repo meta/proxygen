@@ -116,7 +116,7 @@ std::vector<compress::Header> prepareMessageForCompression(
           folly::split(';', value, cookiePieces);
           folly::grow_capacity_by(cookies, cookiePieces.size());
           for (auto cookie : cookiePieces) {
-            cookies.push_back(std::string(ltrimWhitespace(cookie)));
+            cookies.emplace_back(ltrimWhitespace(cookie));
             allHeaders.emplace_back(code, name, cookies.back());
           }
         } else if (code != HTTP_HEADER_HOST && (isPublic || name[0] != ':')) {
