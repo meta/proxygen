@@ -1745,8 +1745,9 @@ void HQSession::onFlowControlUpdate(quic::StreamId id) noexcept {
   auto stream = findEgressStream(id);
 
   if (!stream) {
-    LOG(ERROR) << "Got flow control update for unknown streamID=" << id
-               << " sess=" << this;
+    // WebTransport streams land here; mvfst wakes their own write callbacks.
+    VLOG(4) << "Got flow control update for unknown streamID=" << id
+            << " sess=" << this;
     return;
   }
 
