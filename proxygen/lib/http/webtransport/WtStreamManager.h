@@ -92,6 +92,12 @@ struct WtStreamManager {
   struct EgressCallback {
     virtual ~EgressCallback() = default;
     virtual void eventsAvailable() noexcept = 0;
+    // Only invoked when WtConfig::transportEnforcesFc is set
+    virtual void writeStream(WebTransport::StreamWriteHandle& /*wh*/,
+                             std::unique_ptr<folly::IOBuf> /*data*/,
+                             bool /*fin*/,
+                             WebTransport::ByteEventCallback* /*cb*/) noexcept {
+    }
   };
   /**
    * IngressCallback::onNewPeerStream is invoked whenever a new peer stream has
@@ -125,6 +131,10 @@ struct WtStreamManager {
 
     // move to a new struct options?
     bool trackClosedStreams{true};
+    // The transport enforces WT flow control itself (e.g. raw quic, where the
+    // session owns the connection). Egress skips the buffer and priority queue
+    // and goes straight to EgressCallback::writeStream.
+    bool transportEnforcesFc{false};
   };
 
   WtStreamManager(WtDir dir,

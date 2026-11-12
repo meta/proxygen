@@ -39,6 +39,7 @@ WtConfig createQuicConfig(const quic::TransportSettings& settings) {
   config.peerMaxStreamsBidi = kMaxVarint;
   config.peerMaxStreamsUni = kMaxVarint;
   config.peerMaxConnData = kMaxVarint;
+  config.transportEnforcesFc = true;
   overwritePeerMaxDataWtConfig(config);
   return config;
 }
@@ -47,7 +48,7 @@ bool isWtStreamEgressFcBlocked(
     const WtStreamManager& sm,
     const WtStreamManager::WtWriteHandle& wh) noexcept {
   const auto [currentOffset, maxOffset] = sm.getFlowControlInfo(wh);
-  return currentOffset == maxOffset;
+  return currentOffset >= maxOffset;
 }
 
 /**
@@ -383,8 +384,8 @@ void QuicWtSessionBase::StreamManagerCallback::eventsAvailableImpl() noexcept {
   while (!pq.empty()) {
     const auto id = pq.getNextScheduledID(std::nullopt);
     XCHECK(id.isStreamID());
-    const auto streamId = id.asStreamID();
-    auto* wh = CHECK_NOTNULL(sess.sm_.getBidiHandle(streamId).writeHandle);
+    auto* wh =
+        CHECK_NOTNULL(sess.sm_.getBidiHandle(id.asStreamID()).writeHandle);
     /**
      * Dequeue will be capped by the quic conn/stream flow control. This will
      * either dequeue all the buffered data, or saturate the conn/stream flow
@@ -393,22 +394,33 @@ void QuicWtSessionBase::StreamManagerCallback::eventsAvailableImpl() noexcept {
      */
     auto streamData = sess.sm_.dequeue(*wh, kMaxVarint);
     XCHECK(streamData.data || streamData.fin);
-    auto res = sock->writeChain(streamId,
-                                std::move(streamData.data),
-                                streamData.fin,
-                                streamData.deliveryCallback);
-    XLOG_IF(ERR, res.hasError())
-        << "::writeChain err= " << res.error() << "; id=" << streamId;
+    writeStream(*wh,
+                std::move(streamData.data),
+                streamData.fin,
+                streamData.deliveryCallback);
+  }
+}
 
-    if (streamData.fin) {
-      sock->setStopSendingCallback(streamId, nullptr);
-    } else if (isWtStreamEgressFcBlocked(sess.sm_, *wh)) {
-      // The cached window may lag the peer's MAX_STREAM_DATA; refreshing it
-      // here saves a loop iteration through notifyPendingWriteOnStream.
-      grantMaxData(*sock, sess.sm_, *wh);
-      if (isWtStreamEgressFcBlocked(sess.sm_, *wh)) {
-        sess.quicSocket_->notifyPendingWriteOnStream(streamId, &sess);
-      }
+void QuicWtSessionBase::StreamManagerCallback::writeStream(
+    WtStreamManager::WtWriteHandle& wh,
+    std::unique_ptr<folly::IOBuf> data,
+    bool fin,
+    WebTransport::ByteEventCallback* cb) noexcept {
+  XCHECK(sess.quicSocket_);
+  auto& sock = sess.quicSocket_;
+  const auto streamId = wh.getID();
+  auto res = sock->writeChain(streamId, std::move(data), fin, cb);
+  XLOG_IF(ERR, res.hasError())
+      << "::writeChain err= " << res.error() << "; id=" << streamId;
+
+  if (fin) {
+    sock->setStopSendingCallback(streamId, nullptr);
+  } else if (isWtStreamEgressFcBlocked(sess.sm_, wh)) {
+    // The cached window may lag the peer's MAX_STREAM_DATA; refreshing it
+    // here saves a loop iteration through notifyPendingWriteOnStream.
+    grantMaxData(*sock, sess.sm_, wh);
+    if (isWtStreamEgressFcBlocked(sess.sm_, wh)) {
+      sess.quicSocket_->notifyPendingWriteOnStream(streamId, &sess);
     }
   }
 }

@@ -1469,4 +1469,76 @@ TEST_F(WtStreamManagerTest, H02FinishedHandleRemainsConnFcBlocked) {
   EXPECT_TRUE(streamManager->onMaxData(MaxConnData{WtConfig::kDefaultFc + 1}));
 }
 
+struct PassThroughEgressCb : WtSmEgressCb {
+  void writeStream(WebTransport::StreamWriteHandle& wh,
+                   std::unique_ptr<folly::IOBuf> data,
+                   bool fin,
+                   WebTransport::ByteEventCallback*) noexcept override {
+    lastId = wh.getID();
+    written += data ? data->computeChainDataLength() : 0;
+    finWritten = fin;
+  }
+  uint64_t lastId{detail::kInvalidVarint};
+  uint64_t written{0};
+  bool finWritten{false};
+};
+
+class WtStreamManagerPassThroughTest : public ::testing::Test {
+ protected:
+  WtConfig makeConfig() {
+    WtConfig cfg;
+    cfg.transportEnforcesFc = true;
+    return cfg;
+  }
+  PassThroughEgressCb egressCb;
+  WtSmIngressCb ingressCb;
+  quic::HTTPPriorityQueue pq;
+  WtStreamManager sm{
+      detail::WtDir::Client, makeConfig(), egressCb, ingressCb, pq};
+};
+
+TEST_F(WtStreamManagerPassThroughTest, WriteSkipsBufferAndQueue) {
+  auto* uni = CHECK_NOTNULL(sm.createEgressHandle());
+  auto res = uni->writeStreamData(makeBuf(10), /*fin=*/false, nullptr);
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_EQ(*res, WebTransport::FCState::UNBLOCKED);
+  EXPECT_EQ(egressCb.lastId, uni->getID());
+  EXPECT_EQ(egressCb.written, 10);
+  EXPECT_TRUE(pq.empty());
+  EXPECT_FALSE(egressCb.evAvail_);
+  EXPECT_EQ(sm.getFlowControlInfo(*uni).currentOffset, 10);
+}
+
+TEST_F(WtStreamManagerPassThroughTest, BlockedOncePeerWindowReached) {
+  auto* uni = CHECK_NOTNULL(sm.createEgressHandle());
+  // writes past the window still reach the transport, which buffers them
+  auto res = uni->writeStreamData(
+      makeBuf(WtConfig::kDefaultFc + 1), /*fin=*/false, nullptr);
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_EQ(*res, WebTransport::FCState::BLOCKED);
+  EXPECT_EQ(egressCb.written, WtConfig::kDefaultFc + 1);
+}
+
+TEST_F(WtStreamManagerPassThroughTest, AwaitWritableResolvesOnMaxData) {
+  auto* uni = CHECK_NOTNULL(sm.createEgressHandle());
+  const auto id = uni->getID();
+  uni->writeStreamData(makeBuf(WtConfig::kDefaultFc), /*fin=*/false, nullptr);
+  auto fut = uni->awaitWritable();
+  ASSERT_TRUE(fut.hasValue());
+  EXPECT_FALSE(fut.value().isReady());
+
+  EXPECT_TRUE(sm.onMaxData(MaxStreamData{{WtConfig::kDefaultFc + 100}, id}));
+  ASSERT_TRUE(fut.value().isReady());
+  EXPECT_EQ(fut.value().value(), 100);
+}
+
+TEST_F(WtStreamManagerPassThroughTest, FinClosesHandle) {
+  auto* uni = CHECK_NOTNULL(sm.createEgressHandle());
+  const auto id = uni->getID();
+  auto res = uni->writeStreamData(makeBuf(10), /*fin=*/true, nullptr);
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_TRUE(egressCb.finWritten);
+  EXPECT_EQ(sm.getEgressHandle(id), nullptr);
+}
+
 } // namespace proxygen::coro::test
