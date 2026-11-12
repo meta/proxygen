@@ -1236,6 +1236,44 @@ TEST_F(H3WtSessionTest, AcquireIngressStream) {
   }
 }
 
+TEST_F(H3WtSessionTest, EncodesEgressErrorCodes) {
+  socketDriver_.setMaxBidiStreams(1);
+  auto handle = session_->createBidiStream();
+  ASSERT_TRUE(handle.hasValue());
+  auto id = handle->readHandle->getID();
+
+  handle->readHandle->stopSending(WT_ERROR_1);
+  eventBase_.loop();
+  EXPECT_EQ(socketDriver_.streams_[id].error,
+            WebTransport::toHTTPErrorCode(WT_ERROR_1));
+
+  handle->writeHandle->resetStream(WT_ERROR_2);
+  eventBase_.loop();
+  EXPECT_EQ(socketDriver_.streams_[id].error,
+            WebTransport::toHTTPErrorCode(WT_ERROR_2));
+}
+
+TEST_F(H3WtSessionTest, DecodesIngressResetCode) {
+  constexpr uint64_t kClientUniId = 2;
+  WebTransport::StreamReadHandle* uni = nullptr;
+  EXPECT_CALL(*handler_, onNewUniStream(_)).WillOnce(SaveArg<0>(&uni));
+  ASSERT_TRUE(session_->acquireIngressStream(kClientUniId));
+  ASSERT_NE(uni, nullptr);
+  auto read = uni->readStreamData();
+
+  socketDriver_.addReadError(kClientUniId,
+                             quic::QuicErrorCode(quic::ApplicationErrorCode(
+                                 WebTransport::toHTTPErrorCode(WT_ERROR_2))));
+  eventBase_.loop();
+
+  ASSERT_TRUE(read.isReady());
+  auto result = std::move(read).getTry();
+  ASSERT_TRUE(result.hasException());
+  auto* ex = result.exception().get_exception<WebTransport::Exception>();
+  ASSERT_NE(ex, nullptr);
+  EXPECT_EQ(ex->error, WT_ERROR_2);
+}
+
 TEST_F(H3WtSessionTest, RejectIngressStreamsAfterCloseSession) {
   constexpr uint64_t kClientBidiId = 4;
   constexpr uint64_t kClientUniId = 2;

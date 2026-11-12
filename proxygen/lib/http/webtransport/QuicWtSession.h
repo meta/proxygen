@@ -42,6 +42,10 @@ class QuicWtSessionBase
     : public detail::WtSessionBase
     , private quic::StreamWriteCallback {
  public:
+  uint64_t toTransportErrorCode(uint64_t err) const noexcept;
+  // a code outside the reserved range is passed through unchanged
+  uint64_t fromTransportErrorCode(uint64_t err) const noexcept;
+
   [[nodiscard]] quic::TransportInfo getTransportInfo() const noexcept override {
     XCHECK(quicSocket_);
     return quicSocket_->getTransportInfo();
@@ -80,6 +84,7 @@ class QuicWtSessionBase
   QuicWtSessionBase(std::shared_ptr<QuicSocket> quicSocket,
                     WtHandlerPtr wtHandler,
                     detail::WtStreamManager::WtConfig wtConfig,
+                    bool usesEncodedApplicationErrorCodes,
                     H3ConnectStreamCallback* observer = nullptr);
   ~QuicWtSessionBase() override = 0;
 
@@ -138,6 +143,7 @@ class QuicWtSessionBase
   mutable folly::SocketAddress cachedLocalAddr_;
   mutable folly::SocketAddress cachedPeerAddr_;
   WtHandlerPtr wtHandler_;
+  bool usesEncodedApplicationErrorCodes_{false};
   std::unique_ptr<quic::HTTPPriorityQueue> priorityQueue_;
   detail::WtStreamManager sm_;
   H3ConnectStreamCallback* observer_{nullptr};

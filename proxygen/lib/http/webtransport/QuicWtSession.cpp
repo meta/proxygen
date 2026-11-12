@@ -80,17 +80,18 @@ void grantMaxData(const QuicSocket& sock,
 struct QuicWtEventVisitor {
   quic::QuicSocket& quicSocket;
   H3ConnectStreamCallback* observer{nullptr};
+  const QuicWtSessionBase& sess;
 
   // operations map to QuicSocket invocations
   void operator()(WtStreamManager::ResetStream ev) const {
-    quicSocket.resetStream(ev.streamId, ev.err);
+    quicSocket.resetStream(ev.streamId, sess.toTransportErrorCode(ev.err));
     quicSocket.setStopSendingCallback(ev.streamId, nullptr);
   }
 
   void operator()(WtStreamManager::StopSending ev) const {
     // not setReadCallback(id, nullptr, err): that also unregisters the read
     // callback, so the peer's RESET_STREAM would never close the ingress side
-    quicSocket.stopSending(ev.streamId, ev.err);
+    quicSocket.stopSending(ev.streamId, sess.toTransportErrorCode(ev.err));
   }
 
   void operator()(WtStreamManager::EgressPriority pri) const {
@@ -158,10 +159,12 @@ QuicWtSessionBase::QuicWtSessionBase(
     std::shared_ptr<quic::QuicSocket> quicSocket,
     WtHandlerPtr wtHandler,
     WtStreamManager::WtConfig wtConfig,
+    bool usesEncodedApplicationErrorCodes,
     H3ConnectStreamCallback* observer)
     : WtSessionBase(nullptr, sm_),
       quicSocket_(std::move(quicSocket)),
       wtHandler_(std::move(wtHandler)),
+      usesEncodedApplicationErrorCodes_(usesEncodedApplicationErrorCodes),
       priorityQueue_(std::make_unique<quic::HTTPPriorityQueue>()),
       sm_{quicSocket_->getNodeType() == quic::QuicNodeType::Server
               ? WtDir::Server
@@ -171,6 +174,20 @@ QuicWtSessionBase::QuicWtSessionBase(
           smCb_,
           *priorityQueue_},
       observer_(observer) {
+}
+
+uint64_t QuicWtSessionBase::toTransportErrorCode(uint64_t err) const noexcept {
+  return usesEncodedApplicationErrorCodes_
+             ? WebTransport::toHTTPErrorCode(static_cast<uint32_t>(err))
+             : err;
+}
+
+uint64_t QuicWtSessionBase::fromTransportErrorCode(
+    uint64_t err) const noexcept {
+  if (!usesEncodedApplicationErrorCodes_) {
+    return err;
+  }
+  return WebTransport::toApplicationErrorCode(err).value_or(err);
 }
 
 QuicWtSessionBase::~QuicWtSessionBase() {
@@ -336,14 +353,16 @@ void QuicWtSessionBase::QuicReadCallback::readAvailable(StreamId id) noexcept {
 void QuicWtSessionBase::QuicReadCallback::readError(StreamId id,
                                                     QuicError error) noexcept {
   XLOG(DBG4) << __func__ << "; id=" << id << "; err=" << error;
-  sess.sm_.onResetStream(
-      WtStreamManager::ResetStream{id, getQuicAppErrCode(error)});
+  sess.sm_.onResetStream(WtStreamManager::ResetStream{
+      .streamId = id,
+      .err = sess.fromTransportErrorCode(getQuicAppErrCode(error))});
 }
 
 void QuicWtSessionBase::QuicStopSendingCallback::onStopSending(
     StreamId id, quic::ApplicationErrorCode ec) noexcept {
   XLOG(DBG4) << __func__ << "; id=" << id << "; err=" << ec;
-  sess.sm_.onStopSending(WtStreamManager::StopSending{id, ec});
+  sess.sm_.onStopSending(WtStreamManager::StopSending{
+      .streamId = id, .err = sess.fromTransportErrorCode(ec)});
 }
 
 // -- StreamManagerCallback overrides --
@@ -372,7 +391,7 @@ void QuicWtSessionBase::StreamManagerCallback::eventsAvailableImpl() noexcept {
   XCHECK(sess.quicSocket_);
   auto& sock = sess.quicSocket_;
   // process control events first
-  QuicWtEventVisitor visitor{*sock, sess.observer_};
+  QuicWtEventVisitor visitor{*sock, sess.observer_, sess};
   auto events = sess.sm_.moveEvents();
   for (auto& event : events) {
     std::visit(visitor, std::move(event));
@@ -500,7 +519,8 @@ QuicWtSession::QuicWtSession(
     const std::shared_ptr<quic::QuicSocket>& quicSocket, WtHandlerPtr wtHandler)
     : QuicWtSessionBase(quicSocket,
                         std::move(wtHandler),
-                        createQuicConfig(quicSocket->getTransportSettings())) {
+                        createQuicConfig(quicSocket->getTransportSettings()),
+                        /*usesEncodedApplicationErrorCodes=*/false) {
   manualRead_ = true;
   quicSocket_->setConnectionCallback(&connCb_);
   quicSocket_->setDatagramCallback(&dgramCb_);
@@ -586,6 +606,7 @@ H3WtSession::H3WtSession(std::shared_ptr<quic::QuicSocket> quicSocket,
           std::move(quicSocket),
           WtHandlerPtr{wtHandler.release(), WtHandlerDeleter{.owning = true}},
           std::move(wtConfig),
+          /*usesEncodedApplicationErrorCodes=*/true,
           &observer),
       connectStreamId_(connectStreamId) {
   XCHECK_LE(connectStreamId, detail::kMaxVarint);
@@ -604,7 +625,7 @@ folly::Expected<folly::Unit, WebTransport::ErrorCode> H3WtSession::closeSession(
   // we need to bidi reset all assoc quic streams (ss+rst_stream)
   auto streamIds = sm_.streamIds();
   XLOG(DBG4) << __func__ << "; nStreams=" << streamIds.size();
-  const uint32_t ec = error.value_or(0);
+  const uint64_t ec = toTransportErrorCode(error.value_or(0));
   // bidirectionally reset all assoc quic streams
   for (uint64_t id : streamIds) {
     quicSocket_->setReadCallback(id, nullptr, ec);
