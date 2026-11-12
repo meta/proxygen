@@ -49,6 +49,8 @@ HTTPErrorCode sourceCompleteErr2ErrorCode(HTTPErrorCode ec) {
     case HTTPErrorCode::NO_ERROR:
     case HTTPErrorCode::CANCEL:
     case HTTPErrorCode::FLOW_CONTROL_ERROR:
+    case HTTPErrorCode::PROTOCOL_ERROR:
+    case HTTPErrorCode::REFUSED_STREAM:
       return ec;
     case HTTPErrorCode::CORO_CANCELLED:
       // Called when a reader cancels a reading coroutine

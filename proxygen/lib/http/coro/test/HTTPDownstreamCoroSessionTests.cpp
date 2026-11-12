@@ -2482,6 +2482,30 @@ TEST_P(HTTPDownstreamSessionTest, HandlerGracefullyTerminateIngressYieldError) {
   parseOutput();
 }
 
+TEST_P(H2QDownstreamSessionTest, StopRequestSourceWithWireError) {
+  for (const auto error :
+       {HTTPErrorCode::PROTOCOL_ERROR, HTTPErrorCode::REFUSED_STREAM}) {
+    SCOPED_TRACE(static_cast<uint16_t>(error));
+    auto id = sendRequest("/", makeBuf(100), false, false);
+    auto handler =
+        addSimpleStrictHandler([this, error](folly::EventBase *,
+                                             HTTPSessionContextPtr,
+                                             HTTPSourceHolder requestSource)
+                                   -> folly::coro::Task<HTTPSourceHolder> {
+          co_await expectRequest(requestSource, HTTPMethod::POST, "/", false);
+          requestSource.stopReading(error);
+          co_return nullptr;
+        });
+    // Process the reset without running the idle timeout between requests.
+    loopN(4);
+    expectStreamAbort(id,
+                      error == HTTPErrorCode::PROTOCOL_ERROR
+                          ? ErrorCode::PROTOCOL_ERROR
+                          : ErrorCode::REFUSED_STREAM);
+  }
+  parseOutput();
+}
+
 // Push tests -- H2/Q only, H1 doesn't support push
 TEST_P(H2QDownstreamSessionTest, Push) {
   // Receive a request and send a complete response including a complete push
