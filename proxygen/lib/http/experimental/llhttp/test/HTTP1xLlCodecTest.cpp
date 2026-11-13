@@ -385,6 +385,33 @@ TEST(HTTP1xLlCodecTest, Test09ReqFollowedByMoreDataRejected) {
   EXPECT_EQ(callbacks.msg_->getHeaders().size(), 0);
 }
 
+TEST(HTTP1xLlCodecTest, TestNonHttp1xVersionRejected) {
+  for (const char* version : {"HTTP/0.9", "HTTP/2.0"}) {
+    HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+    HTTP1xLlCodecCallback callbacks;
+    codec.setCallback(&callbacks);
+    codec.onIngress(*folly::IOBuf::copyBuffer(fmt::format(
+        "POST /a {}\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello", version)));
+    EXPECT_EQ(callbacks.headersComplete, 0) << version;
+    EXPECT_EQ(callbacks.bodyLen, 0) << version;
+    EXPECT_EQ(callbacks.errors, 1) << version;
+  }
+}
+
+TEST(HTTP1xLlCodecTest, TestNonHttp1xResponseVersionRejected) {
+  for (const char* version : {"HTTP/0.9", "HTTP/2.0"}) {
+    HTTP1xLlCodec codec(TransportDirection::UPSTREAM);
+    HTTP1xLlCodecCallback callbacks;
+    codec.setCallback(&callbacks);
+    folly::IOBufQueue writeBuf(folly::IOBufQueue::cacheChainLength());
+    codec.generateHeader(writeBuf, codec.createStream(), getGetRequest(), true);
+    codec.onIngress(*folly::IOBuf::copyBuffer(
+        fmt::format("{} 200 OK\r\nContent-Length: 0\r\n\r\n", version)));
+    EXPECT_EQ(callbacks.headersComplete, 0) << version;
+    EXPECT_EQ(callbacks.errors, 1) << version;
+  }
+}
+
 TEST(HTTP1xLlCodecTest, Test09ReqPauseInHeadersCompletesMessage) {
   HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
   MockHTTPCodecCallback callbacks;

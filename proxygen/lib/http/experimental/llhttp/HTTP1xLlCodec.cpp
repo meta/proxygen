@@ -819,6 +819,7 @@ const llhttp_settings_t* HTTP1xLlCodec::getParserSettings() {
     value.on_protocol = onProtocolCB;
     value.on_url = onURLCB;
     value.on_url_complete = onURLCompleteCB;
+    value.on_version_complete = onVersionCompleteCB;
     value.on_status = onStatusCB;
     value.on_header_field = onHeaderFieldCB;
     value.on_header_value = onHeaderValueCB;
@@ -875,6 +876,14 @@ int HTTP1xLlCodec::onProtocol(const char* buf, size_t len) {
 
 int HTTP1xLlCodec::onURLComplete() {
   return ingressState_.http09Request ? HPE_PAUSED : 0;
+}
+
+int HTTP1xLlCodec::onVersionComplete() {
+  // HTTP/0.9 has no version token, and HTTP/2 is not HTTP/1.x
+  if (parser_->httpMajor() != 1) {
+    return setErrorContext("invalid-version");
+  }
+  return 0;
 }
 
 int HTTP1xLlCodec::onStatus(const char* buf, size_t len) {
@@ -1205,6 +1214,16 @@ int HTTP1xLlCodec::onURLCompleteCB(llhttp_t* parser) {
   auto* codec = getCodec(parser);
   try {
     return codec->onURLComplete();
+  } catch (const std::exception& ex) {
+    codec->ingressState_.errorMessage = ex.what();
+    return -1;
+  }
+}
+
+int HTTP1xLlCodec::onVersionCompleteCB(llhttp_t* parser) {
+  auto* codec = getCodec(parser);
+  try {
+    return codec->onVersionComplete();
   } catch (const std::exception& ex) {
     codec->ingressState_.errorMessage = ex.what();
     return -1;

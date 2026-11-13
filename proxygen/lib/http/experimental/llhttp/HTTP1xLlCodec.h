@@ -97,6 +97,7 @@ class HTTP1xLlCodec : public HTTPCodec {
   int onProtocol(const char* data, size_t len);
   int onURL(const char* data, size_t len);
   int onURLComplete();
+  int onVersionComplete();
   int onStatus(const char* data, size_t len);
   int onHeaderField(const char* data, size_t len);
   int onHeaderValue(const char* data, size_t len);
@@ -113,6 +114,7 @@ class HTTP1xLlCodec : public HTTPCodec {
   static int onProtocolCB(llhttp_t* parser, const char* data, size_t len);
   static int onURLCB(llhttp_t* parser, const char* data, size_t len);
   static int onURLCompleteCB(llhttp_t* parser);
+  static int onVersionCompleteCB(llhttp_t* parser);
   static int onStatusCB(llhttp_t* parser, const char* data, size_t len);
   static int onHeaderFieldCB(llhttp_t* parser, const char* data, size_t len);
   static int onHeaderValueCB(llhttp_t* parser, const char* data, size_t len);
