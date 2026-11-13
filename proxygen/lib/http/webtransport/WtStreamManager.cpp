@@ -117,6 +117,12 @@ struct WtStreamManager::Accessor {
   auto& finOnlyStreams() {
     return sm_.finOnlyStreams_;
   }
+  bool passThrough() const {
+    return sm_.wtConfig_.transportEnforcesFc;
+  }
+  auto& egressCb() {
+    return sm_.egressCb_;
+  }
   WtStreamManager& sm_;
 };
 
@@ -208,6 +214,8 @@ struct WriteHandle : public WebTransport::StreamWriteHandle {
 
   WtBufferedStreamData::DequeueResult dequeue(uint64_t atMost) noexcept;
   Result onMaxData(uint64_t offset);
+  [[nodiscard]] uint64_t writableBytes() const noexcept;
+  void resolveWritable() noexcept;
   WritePromise resetPromise() noexcept;
   void cancel(folly::exception_wrapper ex) noexcept;
   void onStopSending(uint32_t errCode) noexcept;
@@ -215,6 +223,9 @@ struct WriteHandle : public WebTransport::StreamWriteHandle {
 
   Accessor smAccessor_;
   WtBufferedStreamData bufferedSendData_;
+  // pass-through only: bytes handed to the transport, which may exceed the
+  // peer's window since the transport buffers the excess
+  uint64_t passedOffset_{0};
   uint64_t err{kInvalidVarint};
   WritePromise promise_{emptyWritePromise()};
   WriteHandleState state_;
@@ -680,8 +691,12 @@ WtBufferedStreamData::DequeueResult WtStreamManager::dequeue(
 
 auto WtStreamManager::getFlowControlInfo(const WtWriteHandle& wh) const noexcept
     -> FlowControlInfo {
-  const auto& w = writehandle_const_ref_cast(wh).bufferedSendData_.window();
-  return {.currentOffset = w.getCurrentOffset(), .maxOffset = w.getMaxOffset()};
+  const auto& writeHandle = writehandle_const_ref_cast(wh);
+  const auto& w = writeHandle.bufferedSendData_.window();
+  const auto currentOffset = wtConfig_.transportEnforcesFc
+                                 ? writeHandle.passedOffset_
+                                 : w.getCurrentOffset();
+  return {.currentOffset = currentOffset, .maxOffset = w.getMaxOffset()};
 }
 
 void WtStreamManager::onStreamWritable(WtWriteHandle& wh) noexcept {
@@ -1055,6 +1070,17 @@ WriteHandle::writeStreamData(std::unique_ptr<folly::IOBuf> data,
   // TODO(@damlaj): elide unnecessarily recomputing len
   auto len = computeChainLength(data);
   XLOG_IF(ERR, !(len || fin)) << "no-op writeStreamData";
+  if (smAccessor_.passThrough()) {
+    passedOffset_ += len;
+    smAccessor_.egressCb().writeStream(
+        *this, std::move(data), fin, byteEventCallback);
+    if (fin) {
+      // **beware finish must be last** (`this` can be deleted)
+      finish(/*done=*/true);
+      return FcState::UNBLOCKED;
+    }
+    return writableBytes() == 0 ? FcState::BLOCKED : FcState::UNBLOCKED;
+  }
   bool connBlocked = smAccessor_.connSend().buffer(len);
   bool streamBlocked =
       bufferedSendData_.enqueue(std::move(data), fin, byteEventCallback);
@@ -1096,10 +1122,28 @@ Result WriteHandle::onMaxData(uint64_t offset) {
   if (!bufferedSendData_.grant(offset)) {
     return Result::Fail;
   }
-  if (bufferedSendData_.canSendData()) {
+  if (smAccessor_.passThrough()) {
+    resolveWritable();
+  } else if (bufferedSendData_.canSendData()) {
     smAccessor_.onStreamWritable(*this); // stream is now writable
   }
   return Result::Ok;
+}
+
+uint64_t WriteHandle::writableBytes() const noexcept {
+  if (!smAccessor_.passThrough()) {
+    return bufferedSendData_.window().getBufferAvailable();
+  }
+  const auto maxOffset = bufferedSendData_.window().getMaxOffset();
+  return maxOffset > passedOffset_ ? maxOffset - passedOffset_ : 0;
+}
+
+void WriteHandle::resolveWritable() noexcept {
+  if (const auto avail = writableBytes(); avail > 0) {
+    if (auto p = resetPromise(); p.valid()) {
+      p.setValue(avail);
+    }
+  }
 }
 
 folly::Expected<folly::SemiFuture<uint64_t>, WriteHandle::ErrCode>
@@ -1108,9 +1152,8 @@ WriteHandle::awaitWritable() {
   if (state_ == WriteHandleState::Closed) { // nothing to do
     return folly::makeUnexpected(WriteHandle::ErrCode::SEND_ERROR);
   }
-  const auto bufferAvailable = bufferedSendData_.window().getBufferAvailable();
-  if (bufferAvailable > 0) {
-    return folly::makeSemiFuture(bufferAvailable);
+  if (const auto avail = writableBytes(); avail > 0) {
+    return folly::makeSemiFuture(avail);
   }
   auto [p, f] = folly::makePromiseContract<uint64_t>();
   promise_ = std::move(p);
@@ -1131,12 +1174,7 @@ WtBufferedStreamData::DequeueResult WriteHandle::dequeue(
   atMost = std::min(connFc.getAvailable(), atMost);
 
   auto res = bufferedSendData_.dequeue(atMost);
-  const auto bufferAvailable = bufferedSendData_.window().getBufferAvailable();
-  if (bufferAvailable > 0) {
-    if (auto p = resetPromise(); p.valid()) {
-      p.setValue(bufferAvailable);
-    }
-  }
+  resolveWritable();
 
   // commit dequeued bytes to conn window
   const auto bytesDequeued = computeChainLength(res.data);

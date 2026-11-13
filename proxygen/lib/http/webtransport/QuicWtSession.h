@@ -118,6 +118,10 @@ class QuicWtSessionBase
     void readReady(detail::WtStreamManager::WtReadHandle& rh,
                    uint64_t bytesRead) noexcept override;
     void eventsAvailable() noexcept override;
+    void writeStream(detail::WtStreamManager::WtWriteHandle& wh,
+                     std::unique_ptr<folly::IOBuf> data,
+                     bool fin,
+                     ByteEventCallback* cb) noexcept override;
     void onNewPeerStream(uint64_t streamId) noexcept override;
 
    private:

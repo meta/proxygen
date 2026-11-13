@@ -415,18 +415,19 @@ TEST_F(QuicWtSessionTest, QuicStreamWriteError) {
                                          handle->resetStream(0x00);
                                        }};
 
-  // QuicWtSession will write up to kWriteWindow before applying egress
-  // backpressure
+  // QuicWtSession passes the whole write to the socket and signals egress
+  // backpressure once the bytes passed reach the peer's window
   socketDriver_.setStreamFlowControlWindow(id, 0);
   auto result = handle->writeStreamData(
       folly::IOBuf::copyBuffer(std::string(2 * kWriteWindow, 'a')),
       false,
       nullptr);
   ASSERT_TRUE(result.hasValue());
+  EXPECT_EQ(*result, WebTransport::FCState::BLOCKED);
   eventBase_.loop();
 
   auto& stream = socketDriver_.streams_[id];
-  EXPECT_EQ(stream.unsentBuf.chainLength(), kWriteWindow);
+  EXPECT_EQ(stream.unsentBuf.chainLength(), 2 * kWriteWindow);
   ASSERT_TRUE(stream.pendingWriteCb.stream);
 
   // ::onStreamWriteError should not cancel callback
@@ -545,6 +546,27 @@ TEST_F(QuicWtSessionTest, AwaitWritable) {
   auto bytes = std::move(res2).value().getTry();
   EXPECT_TRUE(bytes.hasValue());
   EXPECT_GT(bytes.value(), 0);
+}
+
+TEST_F(QuicWtSessionTest, AwaitWritableResolvesWhenWindowOpens) {
+  auto* wh = session_->createUniStream().value();
+  const auto id = wh->getID();
+  socketDriver_.setStreamFlowControlWindow(id, 0);
+
+  auto res = wh->writeStreamData(
+      folly::IOBuf::copyBuffer(std::string(65'536, 'a')), false, nullptr);
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_EQ(*res, WebTransport::FCState::BLOCKED);
+  auto writable = wh->awaitWritable();
+  ASSERT_TRUE(writable.hasValue());
+  EXPECT_FALSE(writable.value().isReady());
+
+  socketDriver_.setStreamFlowControlWindow(id, 70'000);
+  eventBase_.loop();
+
+  ASSERT_TRUE(writable.value().isReady());
+  EXPECT_GT(writable.value().value(), 0);
+  EXPECT_EQ(socketDriver_.streams_[id].writeBuf.chainLength(), 65'536);
 }
 
 TEST_F(QuicWtSessionTest, ConnectionError) {
@@ -813,13 +835,10 @@ TEST_F(QuicWtSessionTest, ReadAvailableReadFails) {
 
 TEST_F(QuicWtSessionTest, WriteFlowControlBlocked) {
   /**
-   * When a unidirectional stream is first created, it queries the QuicSocket
-   * for available flow control. In the case of MockQuicSocketDriver, it
-   * defaults to 65,536.
-   *
-   * In this test we enqueue one more byte + fin (i.e. 65,537 bytes).
-   * QuicWtSession will only dequeue 65,536 bytes and keep the remaining byte +
-   * fin buffered until additional flow control becomes available
+   * MockQuicSocketDriver's stream window defaults to 65,536. We write one more
+   * byte + fin (i.e. 65,537 bytes). QuicWtSession passes the whole write to the
+   * socket, which sends 65,536 bytes and holds the remaining byte + fin until
+   * additional flow control becomes available.
    */
   auto handle = session_->createUniStream();
   ASSERT_TRUE(handle.hasValue());
@@ -838,8 +857,8 @@ TEST_F(QuicWtSessionTest, WriteFlowControlBlocked) {
   // We expect 65'536 bytes to be in the sent buffer
   auto& stream = socketDriver_.streams_[id];
   EXPECT_EQ(stream.writeBuf.chainLength(), kDataLength - 1);
-  // QuicWtSession installs a PendingWriteCb when saturating peer advertised fc
-  EXPECT_NE(stream.pendingWriteCb.stream, nullptr);
+  EXPECT_EQ(stream.unsentBuf.chainLength(), 1);
+  EXPECT_FALSE(stream.writeEOF);
 
   // simulating peer advertisting additional fc credits
   socketDriver_.setStreamFlowControlWindow(id, kDataLength);
@@ -900,10 +919,13 @@ TEST_F(QuicWtSessionTest, StreamWriteError) {
   // block writes by setting stream flow control window to 0
   socketDriver_.setStreamFlowControlWindow(id, 0);
 
-  // write data to trigger the flow-control-blocked path
-  // eventsAvailable() sees maxData==0, calls notifyPendingWriteOnStream
-  handle.value()->writeStreamData(
-      folly::IOBuf::copyBuffer("blocked"), false, nullptr);
+  // fill the window mirrored at stream creation; the refresh finds the quic
+  // window still closed, so QuicWtSession calls notifyPendingWriteOnStream
+  auto res = handle.value()->writeStreamData(
+      folly::IOBuf::copyBuffer(std::string(65'536, 'a')), false, nullptr);
+  ASSERT_TRUE(res.hasValue());
+  EXPECT_EQ(*res, WebTransport::FCState::BLOCKED);
+  EXPECT_NE(socketDriver_.streams_[id].pendingWriteCb.stream, nullptr);
   eventBase_.loopOnce();
 
   // the stream now has a pending write callback registered
