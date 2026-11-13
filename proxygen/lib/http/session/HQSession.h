@@ -2017,6 +2017,7 @@ class HQSession
       kDefaultWTStreamBufferTimeout};
 
   bool hasHeldWTStreams(quic::StreamId sessionID) const;
+  bool canHoldWTStream(quic::StreamId sessionID);
   std::vector<quic::StreamId> releaseHeldWTStreams(
       folly::Optional<quic::StreamId> sessionID);
   void deliverPendingWTStreams(quic::StreamId sessionID) noexcept;

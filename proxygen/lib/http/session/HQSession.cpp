@@ -2469,6 +2469,9 @@ void HQSession::detachStreamTransport(HQStreamTransportBase* hqStream) {
     if (sock_ && hqStream->hasIngressStreamId()) {
       clearStreamCallbacks(streamId);
     }
+    for (auto id : releaseHeldWTStreams(streamId)) {
+      rejectStream(id, kBufferedRejectedErr);
+    }
     eraseStream(streamId);
   }
 
@@ -3506,12 +3509,14 @@ void HQSession::dispatchUniWTStream(quic::StreamId streamID,
   VLOG(6) << __func__ << " sess=" << *this << " id=" << streamID
           << " wt-sess-id=" << sessionID;
   auto* connectStream = findEligibleWTSession(sessionID);
-  if (!connectStream) {
+  if (connectStream) {
+    deliverWTStream(connectStream, streamID);
+  } else if (canHoldWTStream(sessionID)) {
     unidirectionalReadDispatcher_.holdWTStream(
         streamID, sessionID, wtStreamBufferTimeout_);
-    return;
+  } else {
+    rejectStream(streamID);
   }
-  deliverWTStream(connectStream, streamID);
 }
 
 // Peer initiated Bidi WT streams
@@ -3523,12 +3528,30 @@ void HQSession::dispatchBidiWTStream(HTTPCodec::StreamID streamID,
   VLOG(6) << __func__ << " sess=" << *this << " id=" << streamID
           << " wt-sess-id=" << sessionID;
   auto* connectStream = findEligibleWTSession(sessionID);
-  if (!connectStream) {
+  if (connectStream) {
+    deliverWTStream(connectStream, streamID);
+  } else if (canHoldWTStream(sessionID)) {
     bidirectionalReadDispatcher_.holdWTStream(
         streamID, sessionID, wtStreamBufferTimeout_);
-    return;
+  } else {
+    rejectStream(streamID);
   }
-  deliverWTStream(connectStream, streamID);
+}
+
+bool HQSession::canHoldWTStream(quic::StreamId sessionID) {
+  const bool downstream = direction_ == TransportDirection::DOWNSTREAM;
+  auto* connectStream = findNonDetachedStream(sessionID);
+  // a downstream may see a wt stream before the CONNECT stream itself
+  if (!connectStream) {
+    return downstream && sock_ && sock_->isBidirectionalStream(sessionID);
+  }
+  // a downstream CONNECT stream may still be waiting on its headers
+  if (downstream && !connectStream->hasHeaders_) {
+    return true;
+  }
+  // a pending wt CONNECT
+  return connectStream->txn_.isUpgradePending() &&
+         connectStream->txn_.isWebTransportConnectStream();
 }
 
 bool HQSession::hasHeldWTStreams(quic::StreamId sessionID) const {

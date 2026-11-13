@@ -4451,6 +4451,68 @@ TEST_P(HQDownstreamSessionTestWebTransport, BufferedWTUniStreamKeepsReset) {
   flushRequestsAndLoop();
 }
 
+TEST_P(HQDownstreamSessionTestWebTransport, WTStreamWithoutWTConnectRejected) {
+  const quic::StreamId requestId = 0;
+  const quic::StreamId uniSessionId = 2;
+  const quic::StreamId wtStreamId = 14;
+  const quic::StreamId wtStreamId2 = 18;
+
+  sendSettings();
+  ASSERT_EQ(sendRequest(getGetRequest(), /*eom=*/false), requestId);
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders();
+  flushRequestsAndLoopN(1);
+
+  queuePeerWTUniStream(socketDriver_.get(), wtStreamId, requestId);
+  queuePeerWTUniStream(socketDriver_.get(), wtStreamId2, uniSessionId);
+  flushRequestsAndLoopN(1);
+  for (auto id : {wtStreamId, wtStreamId2}) {
+    ASSERT_TRUE(socketDriver_->streams_[id].error.has_value());
+    EXPECT_EQ(*socketDriver_->streams_[id].error,
+              HTTP3::ErrorCode::HTTP_STREAM_CREATION_ERROR);
+  }
+
+  handler->expectEOM([&] { handler->sendReplyWithBody(200, 100); });
+  handler->expectDetachTransaction();
+  socketDriver_->addReadEOF(requestId, std::chrono::milliseconds(0));
+  flushRequestsAndLoop();
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTestWebTransport,
+       BufferedWTStreamRejectedWhenConnectRejected) {
+  const quic::StreamId sessionId = 0;
+  const quic::StreamId wtStreamId = 14;
+  hqSession_->setWTStreamBufferTimeout(std::chrono::seconds(10));
+
+  sendSettings();
+  queuePeerWTUniStream(socketDriver_.get(), wtStreamId, sessionId);
+  flushRequestsAndLoopN(1);
+  EXPECT_FALSE(socketDriver_->streams_[wtStreamId].error.has_value());
+
+  HTTPMessage req;
+  req.setHTTPVersion(1, 1);
+  req.setUpgradeProtocol("webtransport");
+  req.setMethod(HTTPMethod::CONNECT);
+  req.setURL("/webtransport");
+  req.getHeaders().set(HTTP_HEADER_HOST, "www.facebook.com");
+  ASSERT_EQ(sendRequest(req, /*eom=*/false), sessionId);
+
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&] { handler->sendReplyWithBody(400, 0); });
+  handler->expectEOM();
+  handler->expectDetachTransaction();
+  flushRequestsAndLoopN(1);
+  socketDriver_->addReadEOF(sessionId, std::chrono::milliseconds(0));
+  flushRequestsAndLoop();
+
+  const uint64_t bufferedRejectedErr =
+      WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected);
+  ASSERT_TRUE(socketDriver_->streams_[wtStreamId].error.has_value());
+  EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error, bufferedRejectedErr);
+  hqSession_->closeWhenIdle();
+}
+
 // Server responds via plain sendHeaders(200) (no WT handler in wtCtx, so
 // tryWtSession does not create wtSess_).  Buffered stream must still be
 // delivered via the txn's onWebTransportUniStream fallback path.

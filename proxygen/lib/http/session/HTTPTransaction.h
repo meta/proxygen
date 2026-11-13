@@ -1553,7 +1553,7 @@ class HTTPTransaction
   folly::Optional<ConnectionToken> getConnectionToken() const noexcept;
 
   bool isWebTransportConnectStream() const {
-    return transport_.supportsWebTransport() && wtConnectStream_;
+    return wtConnectStream_;
   }
 
   bool isConnectUdpStream() const {
