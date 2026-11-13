@@ -342,17 +342,16 @@ TEST(HTTP1xLlCodecTest, Test09Req) {
   HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
   HTTP1xLlCodecCallback callbacks;
   codec.setCallback(&callbacks);
-  auto buffer = folly::IOBuf::copyBuffer(string("GET /yeah\r\n"));
-  codec.onIngress(*buffer);
+  // llhttp needs the byte after the request line to know it is HTTP/0.9
+  codec.onIngress(*folly::IOBuf::copyBuffer(string("GET /yeah\r\n")));
+  EXPECT_EQ(callbacks.headersComplete, 0);
+  codec.onIngress(*folly::IOBuf::copyBuffer(string("\r\n")));
   EXPECT_EQ(callbacks.headersComplete, 1);
   EXPECT_EQ(callbacks.messageComplete, 1);
+  EXPECT_EQ(callbacks.errors, 0);
   // "/yeah"
   EXPECT_EQ(callbacks.headerSize.uncompressed, 5);
   EXPECT_EQ(callbacks.headerSize.compressed, callbacks.headerSize.uncompressed);
-  buffer = folly::IOBuf::copyBuffer(string("\r\n"));
-  codec.onIngress(*buffer);
-  EXPECT_EQ(callbacks.headersComplete, 1);
-  EXPECT_EQ(callbacks.messageComplete, 1);
   ASSERT_NE(callbacks.msg_, nullptr);
   EXPECT_EQ(callbacks.msg_->getHTTPVersion(), HTTPMessage::kHTTPVersion09);
 }
@@ -364,9 +363,22 @@ TEST(HTTP1xLlCodecTest, Test09ReqSplitAtLineEnding) {
   codec.onIngress(*folly::IOBuf::copyBuffer(string("GET /yeah\r")));
   EXPECT_EQ(callbacks.headersComplete, 0);
   codec.onIngress(*folly::IOBuf::copyBuffer(string("\n")));
+  EXPECT_EQ(callbacks.headersComplete, 0);
+  codec.onIngress(*folly::IOBuf::copyBuffer(string("\r\n")));
   EXPECT_EQ(callbacks.headersComplete, 1);
   EXPECT_EQ(callbacks.messageComplete, 1);
   EXPECT_EQ(callbacks.errors, 0);
+}
+
+TEST(HTTP1xLlCodecTest, Test09ReqUrlFoldedAcrossReadsRejected) {
+  HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+  HTTP1xLlCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  codec.onIngress(*folly::IOBuf::copyBuffer(string("GET /a\n")));
+  codec.onIngress(
+      *folly::IOBuf::copyBuffer(string("\tb HTTP/1.1\r\nHost: a\r\n\r\n")));
+  EXPECT_EQ(callbacks.headersComplete, 0);
+  EXPECT_EQ(callbacks.errors, 1);
 }
 
 // HTTP/0.9 closes the connection after the response, so nothing may follow
@@ -392,14 +404,14 @@ TEST(HTTP1xLlCodecTest, TestVersionlessConnectRejected) {
   EXPECT_CALL(callbacks, onHeadersComplete(_, _)).Times(0);
   EXPECT_CALL(callbacks, onMessageComplete(_, _)).Times(0);
   EXPECT_CALL(callbacks, onError(_, _, _));
-  codec.onIngress(*folly::IOBuf::copyBuffer("CONNECT host:443\r\n"));
+  codec.onIngress(*folly::IOBuf::copyBuffer("CONNECT host:443\r\n\r\n"));
 }
 
 TEST(HTTP1xLlCodecTest, TestVersionlessPostRejected) {
   HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
   HTTP1xLlCodecCallback callbacks;
   codec.setCallback(&callbacks);
-  codec.onIngress(*folly::IOBuf::copyBuffer("POST /a\r\n"));
+  codec.onIngress(*folly::IOBuf::copyBuffer("POST /a\r\n\r\n"));
   EXPECT_EQ(callbacks.headersComplete, 0);
   EXPECT_EQ(callbacks.errors, 1);
 }
@@ -514,7 +526,7 @@ TEST(HTTP1xLlCodecTest, TestKeepalive09_10) {
   HTTP1xLlCodec codec1(TransportDirection::DOWNSTREAM, true);
   HTTP1xLlCodecCallback callbacks1;
   codec1.setCallback(&callbacks1);
-  auto buffer = folly::IOBuf::copyBuffer(string("GET /yeah\r\n"));
+  auto buffer = folly::IOBuf::copyBuffer(string("GET /yeah\r\n\r\n"));
   codec1.onIngress(*buffer);
   EXPECT_EQ(callbacks1.headersComplete, 1);
   EXPECT_EQ(callbacks1.messageComplete, 1);

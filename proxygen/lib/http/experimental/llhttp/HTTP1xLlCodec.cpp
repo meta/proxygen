@@ -197,8 +197,7 @@ size_t HTTP1xLlCodec::onIngressImpl(const folly::IOBuf& buf) {
     const char* data = (const char*)buf.data();
     const size_t len = buf.length();
     size_t bytesParsed = parser_->execute(data, len);
-    if (ingressState_.http09Request && !isParserError() &&
-        (parser_->isPaused() || data[len - 1] == '\n')) {
+    if (ingressState_.http09Request && !isParserError()) {
       endHttp09RequestLine();
     }
     if (!isUpgradePending()) {
@@ -857,14 +856,6 @@ int HTTP1xLlCodec::onURL(const char* buf, size_t len) {
     return rc;
   }
   ingressState_.url.append(buf, len);
-  // A request line ending right after the URL is HTTP/0.9
-  const char* urlEnd = buf + len;
-  const char* bufEnd =
-      reinterpret_cast<const char*>(ingressState_.buf->data()) +
-      ingressState_.buf->length();
-  if (urlEnd < bufEnd && (*urlEnd == '\r' || *urlEnd == '\n')) {
-    ingressState_.http09Request = true;
-  }
   return 0;
 }
 
@@ -876,12 +867,16 @@ int HTTP1xLlCodec::onProtocol(const char* buf, size_t len) {
 }
 
 int HTTP1xLlCodec::onURLComplete() {
+  // llhttp has already parsed a version-less request line as HTTP/0.9
+  if (parser_->httpMajor() != 0 || parser_->httpMinor() != 9) {
+    return 0;
+  }
   // GET is the only HTTP/0.9 method
-  if (parser_->httpMajor() == 0 && parser_->httpMinor() == 9 &&
-      std::string_view(parser_->methodStr()) != "GET") {
+  if (std::string_view(parser_->methodStr()) != "GET") {
     return setErrorContext("invalid-method");
   }
-  return ingressState_.http09Request ? HPE_PAUSED : 0;
+  ingressState_.http09Request = true;
+  return HPE_PAUSED;
 }
 
 int HTTP1xLlCodec::onVersionComplete() {
