@@ -2074,6 +2074,7 @@ size_t http_parser_execute_options (http_parser *parser,
           state = s_chunk_size_almost_done;
           break;
         }
+        STRICT_CHECK(ch == LF);
         break;
       }
 
@@ -2117,14 +2118,14 @@ size_t http_parser_execute_options (http_parser *parser,
       case s_chunk_data_almost_done:
         assert(parser->flags & F_CHUNKED);
         assert(parser->content_length == 0);
-        NOOP_CHECK(ch != CR);
+        STRICT_CHECK(ch != CR);
         state = s_chunk_data_done;
         CALLBACK_DATA(body);
         break;
 
       case s_chunk_data_done:
         assert(parser->flags & F_CHUNKED);
-        NOOP_CHECK(ch != LF);
+        STRICT_CHECK(ch != LF);
         state = s_chunk_size_start;
         parser->nread = 0;
         data_or_header_data_start = p;

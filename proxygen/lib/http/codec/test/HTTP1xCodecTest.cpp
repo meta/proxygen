@@ -971,6 +971,65 @@ TEST(HTTP1xCodecTest, TestMalformedChunkDelimiter) {
   codec.onIngress(*buf);
 }
 
+TEST(HTTP1xCodecTest, TestMalformedChunkDataDelimiter) {
+  HTTP1xCodec codec(TransportDirection::DOWNSTREAM);
+  MockHTTPCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+
+  auto buf = folly::IOBuf::copyBuffer(
+      "POST /hello HTTP/1.1\r\n"
+      "Host: localhost:8080\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "\r\n"
+      "5\r\n"
+      "hello"
+      "XX" // chunk data must be followed by CRLF, not any two bytes
+      "0\r\n"
+      "\r\n"
+      "GET /admin HTTP/1.1\r\n"
+      "Host: localhost\r\n"
+      "\r\n");
+
+  EXPECT_CALL(callbacks, onMessageBegin(1, _));
+  EXPECT_CALL(callbacks, onHeadersComplete(1, _));
+  EXPECT_CALL(callbacks, onChunkHeader(1, 5));
+  EXPECT_CALL(callbacks, onError(1, _, _))
+      .WillOnce(Invoke(
+          [&](HTTPCodec::StreamID, std::shared_ptr<HTTPException> error, bool) {
+            EXPECT_EQ(error->getHttpStatusCode(), 400);
+            EXPECT_EQ(error->getProxygenError(), kErrorParseBody);
+          }));
+
+  codec.onIngress(*buf);
+}
+
+TEST(HTTP1xCodecTest, TestBareLFInChunkExtension) {
+  HTTP1xCodec codec(TransportDirection::DOWNSTREAM);
+  MockHTTPCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+
+  auto buf = folly::IOBuf::copyBuffer(
+      "POST /hello HTTP/1.1\r\n"
+      "Host: localhost:8080\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "\r\n"
+      "5;ext\n" // a bare LF must not be swallowed as part of the extension
+      "hello\r\n"
+      "0\r\n"
+      "\r\n");
+
+  EXPECT_CALL(callbacks, onMessageBegin(1, _));
+  EXPECT_CALL(callbacks, onHeadersComplete(1, _));
+  EXPECT_CALL(callbacks, onError(1, _, _))
+      .WillOnce(Invoke(
+          [&](HTTPCodec::StreamID, std::shared_ptr<HTTPException> error, bool) {
+            EXPECT_EQ(error->getHttpStatusCode(), 400);
+            EXPECT_EQ(error->getProxygenError(), kErrorParseBody);
+          }));
+
+  codec.onIngress(*buf);
+}
+
 TEST(HTTP1xCodecTest, Test1xxConnectionHeader) {
   HTTP1xCodec upstream(TransportDirection::UPSTREAM);
   HTTP1xCodec downstream(TransportDirection::DOWNSTREAM);
