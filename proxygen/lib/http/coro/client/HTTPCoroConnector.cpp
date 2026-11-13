@@ -106,8 +106,10 @@ folly::coro::Task<std::unique_ptr<CoroTransportIf>> connectTCP(
     folly::SocketAddress connectAddr,
     std::chrono::milliseconds timeoutMs,
     const HTTPCoroConnector::ConnectionParams& connParams) {
-  auto asyncSocket = folly::AsyncSocket::newSocket(eventBase);
+  // Destroying a socket mid-connect fails the connect into cb, so cb must
+  // outlive the socket when this coroutine is cancelled.
   ConnectCB cb;
+  auto asyncSocket = folly::AsyncSocket::newSocket(eventBase);
   asyncSocket->connect(&cb,
                        connectAddr,
                        timeoutMs.count(),
@@ -359,6 +361,8 @@ folly::coro::Task<std::unique_ptr<CoroTransportIf>> connectTLS(
     }
     co_return sslTransport;
   } else {
+    // Must outlive sslSock, as in connectTCP.
+    ConnectCB cb;
     folly::AsyncSSLSocket::UniquePtr sslSock(
         new folly::AsyncSSLSocket(connParams.sslContext, eventBase));
     if (sslSession) {
@@ -369,7 +373,6 @@ folly::coro::Task<std::unique_ptr<CoroTransportIf>> connectTLS(
       sslSock->setServerName(std::move(sendSNI).value());
     }
     sslSock->forceCacheAddrOnFailure(true);
-    ConnectCB cb;
     sslSock->connect(&cb,
                      connectAddr,
                      timeoutMs.count(),

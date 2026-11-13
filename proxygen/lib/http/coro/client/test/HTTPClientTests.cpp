@@ -398,6 +398,36 @@ TEST_P(HTTPClientTests, CancelledConnection) {
   evb_.loop();
 }
 
+// Cancelling a connect that is still in flight destroys its socket, which fails
+// the pending connect into the connect callback. The fake backend never
+// delivers the connect's write event, so the socket is still connecting when
+// the cancellation lands.
+TEST_P(HTTPClientTests, CancelInFlightConnect) {
+  if (useQuic()) {
+    return;
+  }
+  folly::ScopedEventBaseThread scopedEvb(
+      folly::EventBase::Options().setBackendFactory(
+          []() { return std::make_unique<EventBaseBackend>(); }),
+      nullptr,
+      "");
+  auto& connectEvb = *scopedEvb.getEventBase();
+  folly::CancellationSource source;
+  auto connect =
+      co_withExecutor(&connectEvb,
+                      folly::coro::co_withCancellation(
+                          source.getToken(),
+                          HTTPCoroConnector_connect(&connectEvb,
+                                                    serverAddress_,
+                                                    seconds(30),
+                                                    getConnParams(GetParam()))))
+          .start();
+  // Queued behind the connect, so it runs once the connect is in flight.
+  connectEvb.runInEventBaseThreadAndWait([&] { source.requestCancellation(); });
+  auto sess = std::move(connect).getTry();
+  EXPECT_TRUE(sess.hasException<folly::OperationCancelled>());
+}
+
 CO_TEST_P_X(HTTPClientTests, MigrateSessionEvb) {
   auto maybeSess = co_await co_awaitTry(
       HTTPCoroConnector_connect(&evb_,
