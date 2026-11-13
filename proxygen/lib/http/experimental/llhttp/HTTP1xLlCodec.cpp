@@ -66,6 +66,7 @@ bool hasUserInfo(std::string_view url) {
   auto end = url.find_first_of("/?#", start);
   return url.substr(start, end - start).find('@') != std::string_view::npos;
 }
+
 } // namespace
 
 namespace proxygen {
@@ -999,6 +1000,12 @@ int HTTP1xLlCodec::onHeadersComplete() {
     }
     if (parseUrl.hasHost() && hasUserInfo(ingressState_.msg->getURL())) {
       return setErrorContext("url-userinfo");
+    }
+    // CONNECT only takes the authority form, host:port
+    if (connectionState_.connectRequest &&
+        (parseUrl.hostAndPort() != parseUrl.url() || !parseUrl.hasHost() ||
+         parseUrl.port() == 0)) {
+      return setErrorContext("invalid-connect-target");
     }
     if (parseUrl.hasHost()) {
       auto hostAndPort = parseUrl.hostAndPort();

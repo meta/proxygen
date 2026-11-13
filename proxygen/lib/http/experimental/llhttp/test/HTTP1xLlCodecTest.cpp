@@ -682,6 +682,31 @@ TEST(HTTP1xLlCodecTest, TestUnderscoreAllowedInHost) {
   codec.onIngress(*buffer);
 }
 
+TEST(HTTP1xLlCodecTest, TestConnectRequiresAuthorityForm) {
+  for (const auto& [target, valid] :
+       std::vector<std::pair<std::string, bool>>{{"a.com:443", true},
+                                                 {"[::1]:443", true},
+                                                 {"a.com", false},
+                                                 {"/x", false},
+                                                 {"*", false},
+                                                 {"a.com:443/x", false},
+                                                 {"a.com:443?q", false},
+                                                 {"http://a.com:443", false},
+                                                 {":443", false},
+                                                 {"a.com:0", false},
+                                                 {"x[::1]y:443", false},
+                                                 {"a[b]:443", false}}) {
+    SCOPED_TRACE(target);
+    HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+    HTTP1xLlCodecCallback callbacks;
+    codec.setCallback(&callbacks);
+    codec.onIngress(*folly::IOBuf::copyBuffer(
+        "CONNECT " + target + " HTTP/1.1\r\nHost: a.com:443\r\n\r\n"));
+    EXPECT_EQ(callbacks.headersComplete, valid ? 1 : 0);
+    EXPECT_EQ(callbacks.errors, valid ? 0 : 1);
+  }
+}
+
 TEST(HTTP1xLlCodecTest, TestHeadRequestChunkedResponse) {
   HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
   HTTP1xLlCodecCallback callbacks;
