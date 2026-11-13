@@ -1164,6 +1164,8 @@ int HTTP1xLlCodec::onChunkComplete() {
 int HTTP1xLlCodec::onMessageComplete() {
   DCHECK(isBody() || isParsingTrailers());
   ingressState_.parseState = ParseState::kIdle;
+  // Trailers can also close the connection
+  connectionState_.keepAlive &= parser_->shouldKeepAlive();
   if (ingressState_.trailers) {
     callback_->onTrailersComplete(ingressState_.txnID,
                                   std::move(ingressState_.trailers));

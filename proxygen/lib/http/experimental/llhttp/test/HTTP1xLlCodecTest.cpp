@@ -1091,6 +1091,29 @@ TEST(HTTP1xLlCodecTest, TestTrailersHaveTheirOwnHeaderBudget) {
   EXPECT_EQ(callbacks.messageComplete, 1);
 }
 
+TEST(HTTP1xLlCodecTest, TestConnectionCloseTrailerNotReusable) {
+  HTTP1xLlCodec downstream(TransportDirection::DOWNSTREAM);
+  FakeHTTPCodecCallback downstreamCallbacks;
+  downstream.setCallback(&downstreamCallbacks);
+  downstream.onIngress(*folly::IOBuf::copyBuffer(
+      "POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "0\r\nConnection: close\r\n\r\n"));
+  EXPECT_EQ(downstreamCallbacks.messageComplete, 1);
+  EXPECT_FALSE(downstream.isReusable());
+
+  HTTP1xLlCodec upstream(TransportDirection::UPSTREAM);
+  FakeHTTPCodecCallback upstreamCallbacks;
+  upstream.setCallback(&upstreamCallbacks);
+  HTTPMessage req = getGetRequest();
+  folly::IOBufQueue reqBuf;
+  upstream.generateHeader(reqBuf, upstream.createStream(), req, true);
+  upstream.onIngress(*folly::IOBuf::copyBuffer(
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "0\r\nConnection: close\r\n\r\n"));
+  EXPECT_EQ(upstreamCallbacks.messageComplete, 1);
+  EXPECT_FALSE(upstream.isReusable());
+}
+
 TEST(HTTP1xLlCodecTest, TestNonHttpProtocolIsRejected) {
   HTTP1xLlCodec downstream(TransportDirection::DOWNSTREAM);
   FakeHTTPCodecCallback downstreamCallbacks;
