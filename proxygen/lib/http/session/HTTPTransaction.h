@@ -382,7 +382,14 @@ class HTTPTransactionTransportCallback {
 };
 
 class HTTPSessionBase;
-struct HttpWtClientCallbackIf;
+struct HttpWtClientCallbackIf {
+  virtual ~HttpWtClientCallbackIf() noexcept = default;
+  virtual void onHeaders(std::unique_ptr<HTTPMessage>) noexcept {
+  }
+  virtual void onErr(const HTTPException&) noexcept {
+  }
+};
+
 using HttpWtClientCallbackPtr = std::unique_ptr<HttpWtClientCallbackIf>;
 
 class HTTPTransaction
@@ -2052,14 +2059,6 @@ class HTTPTransaction
   // can inspect any session state available through public methods
   // when destruction of the session begins.
   HTTPTransactionObserverContainer txnObserverContainer_;
-};
-
-struct HttpWtClientCallbackIf {
-  virtual ~HttpWtClientCallbackIf() noexcept = default;
-  virtual void onHeaders(std::unique_ptr<HTTPMessage>) noexcept {
-  }
-  virtual void onErr(const HTTPException&) noexcept {
-  }
 };
 
 /**

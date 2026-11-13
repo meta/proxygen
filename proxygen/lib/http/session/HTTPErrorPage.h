@@ -10,14 +10,11 @@
 
 #include <cstdint>
 #include <folly/Range.h>
+#include <folly/io/IOBuf.h>
 #include <memory>
 #include <proxygen/lib/http/HTTPHeaders.h>
 #include <proxygen/lib/http/ProxygenErrorEnum.h>
 #include <string>
-
-namespace folly {
-class IOBuf;
-}
 
 namespace proxygen {
 
