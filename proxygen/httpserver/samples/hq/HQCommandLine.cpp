@@ -337,6 +337,13 @@ void initializeTransportSettings(HQToolParams& hqUberParams) {
     hqParams.transportSettings.dataPathType =
         quic::DataPathType::ContinuousMemory;
   }
+  if (hqUberParams.mode == HQMode::SERVER) {
+    // Until a client's address is validated, send at most three full-sized
+    // packets per packet received from it, close to the three times the
+    // bytes received that RFC 9000 Section 8.1 allows.
+    hqParams.transportSettings.enableWritableBytesLimit = true;
+    hqParams.transportSettings.limitedCwndInMss = 3;
+  }
   if (FLAGS_rate_limit >= 0) {
     CHECK(hqUberParams.mode == HQMode::SERVER);
     std::get<HQToolServerParams>(hqUberParams.params).rateLimitPerThread =
