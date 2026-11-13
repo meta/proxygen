@@ -433,17 +433,22 @@ const StringPiece HTTPMessage::getCookie(const string& name) const {
 void HTTPMessage::removeCookie(const string& name) {
   // These StringPieces point into the Cookie header's storage, so they must
   // not be read after the headers_ mutation below.
-  std::map<StringPiece, StringPiece> cookies;
-  forEachCookie([&cookies](StringPiece cookieName, StringPiece cookieValue) {
-    cookies.emplace(cookieName, cookieValue);
+  // Keep the other cookies in header order, including repeated names.
+  const StringPiece target(name);
+  std::vector<std::pair<StringPiece, StringPiece>> cookies;
+  bool found = false;
+  forEachCookie([&](StringPiece cookieName, StringPiece cookieValue) {
+    if (cookieName == target) {
+      found = true;
+    } else {
+      cookies.emplace_back(cookieName, cookieValue);
+    }
     return false;
   });
 
-  auto it = cookies.find(StringPiece(name));
-  if (it == cookies.end()) {
+  if (!found) {
     return;
   }
-  cookies.erase(it);
 
   if (cookies.empty()) {
     headers_.remove(HTTP_HEADER_COOKIE);
