@@ -39,6 +39,7 @@ WtConfig createQuicConfig(const quic::TransportSettings& settings) {
   config.peerMaxStreamsBidi = kMaxVarint;
   config.peerMaxStreamsUni = kMaxVarint;
   config.peerMaxConnData = kMaxVarint;
+  config.trackClosedStreams = false;
   overwritePeerMaxDataWtConfig(config);
   return config;
 }
