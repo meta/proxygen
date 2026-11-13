@@ -1215,6 +1215,62 @@ CO_TEST_P_X(H3WtTest, HeldStreamResetBeforeConnectResponse) {
   res->wt->closeSession(folly::none);
 }
 
+CO_TEST_P_X(H3WtTest, PeerStreamAfterNon2xxRejected) {
+  constexpr quic::StreamId kConnectStreamId = 0;
+  HTTPMessage msg;
+  msg.setMethod(HTTPMethod::CONNECT);
+  msg.setUpgradeProtocol("webtransport");
+  auto reservation = session_->reserveRequest();
+  auto fut =
+      co_withExecutor(&evb_,
+                      session_->sendWtReq(
+                          std::move(*reservation), msg, DummyWtHandler::make()))
+          .start();
+  co_await rescheduleN(1);
+
+  deliverRespHeaders(kConnectStreamId, makeResponse(500), /*eom=*/false);
+  auto uniId = openPeerUniStream(kConnectStreamId);
+  co_await rescheduleN(2);
+
+  auto& stream = muxTp->socketDriver_.streams_[uniId];
+  CO_ASSERT_TRUE(stream.error.has_value());
+  EXPECT_EQ(
+      *stream.error,
+      quic::ApplicationErrorCode(HTTP3::ErrorCode::HTTP_STREAM_CREATION_ERROR));
+  auto res = co_await co_awaitTry(std::move(fut));
+  EXPECT_TRUE(res.hasValue());
+}
+
+CO_TEST_P_X(H3WtTest, PeerStreamAfterInterimResponseHeld) {
+  constexpr quic::StreamId kConnectStreamId = 0;
+  HTTPMessage msg;
+  msg.setMethod(HTTPMethod::CONNECT);
+  msg.setUpgradeProtocol("webtransport");
+  auto handler = DummyWtHandler::make();
+  auto handlerCtx = handler->ctx;
+  auto reservation = session_->reserveRequest();
+  auto fut =
+      co_withExecutor(
+          &evb_,
+          session_->sendWtReq(std::move(*reservation), msg, std::move(handler)))
+          .start();
+  co_await rescheduleN(1);
+
+  deliverRespHeaders(kConnectStreamId, makeResponse(100), /*eom=*/false);
+  co_await rescheduleN(1);
+  auto uniId = openPeerUniStream(kConnectStreamId);
+  co_await rescheduleN(2);
+  EXPECT_FALSE(muxTp->socketDriver_.streams_[uniId].error.has_value());
+
+  deliverRespHeaders(kConnectStreamId, makeResponse(200), /*eom=*/false);
+  auto res = co_await co_awaitTry(std::move(fut));
+  CO_ASSERT_TRUE(res.hasValue());
+  CO_ASSERT_NE(res->wt, nullptr);
+  co_await rescheduleN(2);
+  EXPECT_EQ(handlerCtx->peerStreams.size(), 1);
+  res->wt->closeSession(folly::none);
+}
+
 CO_TEST_P_X(H3WtTest, DatagramBeforeConnectResponse) {
   constexpr quic::StreamId kConnectStreamId = 0;
   HTTPMessage msg;

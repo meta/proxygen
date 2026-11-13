@@ -286,6 +286,7 @@ struct HTTPCoroSession::StreamState {
     isWtConnectStream_ |= HTTPWebTransport::isConnectMessage(msg);
     bool isWebSocketUpgrade = (isIngress && msg.isIngressWebsocketUpgrade()) ||
                               (!isIngress && msg.isEgressWebsocketUpgrade());
+    bool upgradeFailed = false;
     if (msg.isRequest() &&
         (msg.getMethod() == HTTPMethod::CONNECT || isWebSocketUpgrade)) {
       XCHECK(upgrade_ == Upgrade::NONE);
@@ -293,10 +294,18 @@ struct HTTPCoroSession::StreamState {
     } else if (upgrade_ == Upgrade::PENDING && msg.isResponse() &&
                (msg.getStatusCode() == 200 || isWebSocketUpgrade)) {
       upgrade_ = Upgrade::UPGRADED;
+    } else if (upgrade_ == Upgrade::PENDING && msg.isResponse() &&
+               msg.isFinal()) {
+      upgrade_ = Upgrade::NONE;
+      upgradeFailed = true;
     }
     XLOG(DBG8) << __func__ << "; upgrade=" << int(upgrade_)
                << "; isWtConnectStream=" << isWtConnectStream_;
-    return upgrade_ != Upgrade::NONE;
+    return upgrade_ != Upgrade::NONE || upgradeFailed;
+  }
+
+  bool isUpgradePending() const {
+    return upgrade_ == Upgrade::PENDING;
   }
 
   bool isUpgraded() const {
@@ -3015,7 +3024,8 @@ void HTTPQuicCoroSession::dispatchWTStream(quic::StreamId streamId,
   // a downstream can see a wt stream before its CONNECT stream's headers
   const bool connectMayArrive = !connectStream && isDownstream() &&
                                 quic::isBidirectionalStream(sessionId);
-  if (((connectStream && connectStream->isWtConnectStream()) ||
+  if (((connectStream && connectStream->isWtConnectStream() &&
+        connectStream->isUpgradePending()) ||
        connectMayArrive) &&
       !peerRejectedWt()) {
     holdWtStream(sessionId, streamId);

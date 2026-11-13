@@ -4688,6 +4688,37 @@ CO_TEST_P_X(H3DownstreamWtTest, WebTransportTest) {
   co_return;
 }
 
+CO_TEST_P_X(H3DownstreamWtTest, InterimResponseThenWebTransport) {
+  auto wtHandler = DummyWtHandler::make();
+  wtHandlerCtx_ = wtHandler->ctx;
+  EXPECT_CALL(respSource_, readHeaderEvent())
+      .WillOnce(Return(folly::coro::makeTask<HTTPHeaderEvent>(
+          HTTPHeaderEvent{makeResponse(103), /*inEOM=*/false})))
+      .WillOnce(Return(folly::coro::co_invoke(
+          [wtHandler = std::move(
+               wtHandler)]() mutable -> folly::coro::Task<HTTPHeaderEvent> {
+            HTTPHeaderEvent ev{makeResponse(200), /*inEOM=*/false};
+            ev.wtHandler = std::move(wtHandler);
+            co_return ev;
+          })));
+  EXPECT_CALL(respSource_, readBodyEvent(_)).Times(0);
+  EXPECT_CALL(respSource_, stopReading(_));
+  handlerFn_ =
+      addSimpleStrictHandler([this](folly::EventBase * /*evb*/,
+                                    HTTPSessionContextPtr /*ctx*/,
+                                    HTTPSourceHolder requestSource)
+                                 -> folly::coro::Task<HTTPSourceHolder> {
+        co_await expectRequest(
+            requestSource, HTTPMethod::CONNECT, /*path=*/"/", /*eom=*/false);
+        requestSource.release();
+        co_return &respSource_;
+      });
+  sendWtConnect();
+  co_await folly::coro::sleep(std::chrono::milliseconds(50));
+  CO_ASSERT_NE(wtHandlerCtx_->wtSession, nullptr);
+  wtHandlerCtx_->wtSession->closeSession(folly::none);
+}
+
 CO_TEST_P_X(H3DownstreamWtTest, PeerStreamBeforeConnectRequest) {
   serveWtConnect();
   // the CONNECT stream is the client's first bidi stream, but the wt stream
