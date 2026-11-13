@@ -875,6 +875,11 @@ int HTTP1xLlCodec::onProtocol(const char* buf, size_t len) {
 }
 
 int HTTP1xLlCodec::onURLComplete() {
+  // GET is the only HTTP/0.9 method
+  if (parser_->httpMajor() == 0 && parser_->httpMinor() == 9 &&
+      std::string_view(parser_->methodStr()) != "GET") {
+    return setErrorContext("invalid-method");
+  }
   return ingressState_.http09Request ? HPE_PAUSED : 0;
 }
 

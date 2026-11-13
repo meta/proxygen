@@ -385,6 +385,25 @@ TEST(HTTP1xLlCodecTest, Test09ReqFollowedByMoreDataRejected) {
   EXPECT_EQ(callbacks.msg_->getHeaders().size(), 0);
 }
 
+TEST(HTTP1xLlCodecTest, TestVersionlessConnectRejected) {
+  HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+  MockHTTPCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  EXPECT_CALL(callbacks, onHeadersComplete(_, _)).Times(0);
+  EXPECT_CALL(callbacks, onMessageComplete(_, _)).Times(0);
+  EXPECT_CALL(callbacks, onError(_, _, _));
+  codec.onIngress(*folly::IOBuf::copyBuffer("CONNECT host:443\r\n"));
+}
+
+TEST(HTTP1xLlCodecTest, TestVersionlessPostRejected) {
+  HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+  HTTP1xLlCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  codec.onIngress(*folly::IOBuf::copyBuffer("POST /a\r\n"));
+  EXPECT_EQ(callbacks.headersComplete, 0);
+  EXPECT_EQ(callbacks.errors, 1);
+}
+
 TEST(HTTP1xLlCodecTest, TestNonHttp1xVersionRejected) {
   for (const char* version : {"HTTP/0.9", "HTTP/2.0"}) {
     HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
