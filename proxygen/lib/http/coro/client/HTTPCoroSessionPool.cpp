@@ -556,6 +556,11 @@ void HTTPCoroSessionPool::insertIdleSession(
   XLOG(DBG6) << __func__ << "; sess=" << sess.get();
   auto* session = static_cast<HTTPCoroSession*>(sess.get());
   XCHECK_EQ(sess->getEventBase(), eventBase_);
+  if (isDraining()) {
+    // Nothing flushes a drained pool again, so it must not take on a session.
+    session->initiateDrain();
+    return;
+  }
   auto* holder = std::make_unique<Holder>(*session, *this).release();
   // set as available since immediate local use is expected
   addSession(*holder, Holder::State::Available);

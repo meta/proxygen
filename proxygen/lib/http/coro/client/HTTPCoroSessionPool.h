@@ -222,11 +222,6 @@ class HTTPCoroSessionPool {
     return eventBase_;
   }
 
-  // Number of upstream connect attempts currently outstanding on this pool.
-  // Exposed for shutdown diagnostics: flush() (the forceStop path) does not
-  // requestCancellation(), so a nonzero value at forceStop is a connect that
-  // keeps the worker EventBase loop alive until it self-resolves at
-  // connectTimeout; drain() would cancel it immediately.
   [[nodiscard]] uint64_t getNumConnectsInProgress() const {
     return connectsInProgress_;
   }

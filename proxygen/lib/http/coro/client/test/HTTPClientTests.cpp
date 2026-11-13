@@ -1714,6 +1714,22 @@ TEST_P(HTTPCoroSessionPoolTests, LastOutstandingConnectFailed) {
   pool.reset();
 }
 
+CO_TEST_P_X(HTTPCoroSessionPoolTests, DrainedPoolRejectsIdleSession) {
+  {
+    auto res = co_await pool_->getSessionWithReservation();
+    res.reservation.cancel();
+  }
+  // loop for the session to become detachable
+  co_await folly::coro::co_reschedule_on_current_executor;
+  auto idleSession = pool_->detachIdleSession();
+  XCHECK(idleSession);
+
+  pool_->drain();
+  static_cast<HTTPCoroSession*>(idleSession.get())->attachEvb(&evb_);
+  pool_->insertIdleSession(std::move(idleSession));
+  EXPECT_TRUE(pool_->empty());
+}
+
 CO_TEST_P_X(HTTPCoroSessionPoolTests, IdleSessionsTest) {
   /**
    * pool settings to simplify test:
