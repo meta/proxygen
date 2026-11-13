@@ -49,7 +49,8 @@ class RequestHandler {
   /**
    * Invoked when the session has been upgraded to a different protocol
    */
-  virtual void onUpgrade(proxygen::UpgradeProtocol prot) noexcept = 0;
+  virtual void onUpgrade(proxygen::UpgradeProtocol /*prot*/) noexcept {
+  }
 
   /**
    * Invoked when we finish receiving the body.
