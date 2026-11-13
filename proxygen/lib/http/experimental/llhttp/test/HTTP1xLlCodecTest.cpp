@@ -1744,6 +1744,29 @@ TEST(HTTP1xLlCodecTest, Http11UpgradeRequestRejectHasConnectionClose) {
   EXPECT_FALSE(codec.isReusable());
 }
 
+TEST(HTTP1xLlCodecTest, DuplicateUpgradeRejectHasConnectionClose) {
+  HTTP1xLlCodec codec(TransportDirection::DOWNSTREAM);
+  HTTP1xLlCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  auto txnID = codec.createStream();
+
+  codec.onIngress(*folly::IOBuf::copyBuffer(
+      "GET /foo HTTP/1.1\r\nHost: localhost\r\nConnection: upgrade\r\n"
+      "Upgrade: foo\r\nUpgrade: bar\r\n\r\n"));
+  EXPECT_EQ(callbacks.headersComplete, 1);
+
+  HTTPMessage resp;
+  resp.setHTTPVersion(1, 1);
+  resp.setStatusCode(200);
+  resp.getHeaders().set(HTTP_HEADER_CONTENT_LENGTH, "0");
+  folly::IOBufQueue respBuf(folly::IOBufQueue::cacheChainLength());
+  codec.generateHeader(respBuf, txnID, resp, true);
+
+  auto respStr = respBuf.move()->moveToFbString();
+  EXPECT_NE(respStr.find("Connection: close"), string::npos);
+  EXPECT_FALSE(codec.isReusable());
+}
+
 // A genuine websocket upgrade accept is a real protocol switch: it must keep
 // its Connection: upgrade token and must NOT be forced to close.
 TEST(HTTP1xLlCodecTest, Http11WebsocketUpgradeAcceptKeepsConnectionUpgrade) {

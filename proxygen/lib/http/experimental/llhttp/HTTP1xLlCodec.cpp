@@ -1054,8 +1054,7 @@ int HTTP1xLlCodec::onHeadersComplete() {
     connectionState_.upgradePhase = UpgradePhase::PENDING;
   }
   // disable keepalive for upgraded connections and CONNECT reqs
-  connectionState_.keepAlive &= upgrade.empty();
-  connectionState_.keepAlive &= !connectionState_.connectRequest;
+  connectionState_.keepAlive &= !parser_->isUpgrade();
 
   if (caseInsensitiveEqual(upgrade, kUpgradeToken)) {
     if (isUpstream(transportDirection_)) {
