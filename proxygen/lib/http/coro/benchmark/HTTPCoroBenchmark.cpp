@@ -259,8 +259,6 @@ class BenchmarkFixture {
       serverConfig.quicConfig->transportSettings.batchingMode =
           quic::QuicBatchingMode::BATCHING_MODE_GSO;
       serverConfig.quicConfig->transportSettings.maxBatchSize = 48;
-      serverConfig.quicConfig->transportSettings.dataPathType =
-          quic::DataPathType::ContinuousMemory;
       serverConfig.quicConfig->transportSettings
           .writeConnectionDataPacketsLimit = 48;
     }
@@ -279,8 +277,6 @@ class BenchmarkFixture {
       params.transportSettings.maxCwndInMss = quic::kLargeMaxCwndInMss;
       params.transportSettings.batchingMode =
           quic::QuicBatchingMode::BATCHING_MODE_GSO;
-      params.transportSettings.dataPathType =
-          quic::DataPathType::ContinuousMemory;
       params.transportSettings.maxBatchSize = 48;
       params.transportSettings.writeConnectionDataPacketsLimit = 48;
       resp_ = makeBuf(respSize_);

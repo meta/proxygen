@@ -118,9 +118,6 @@ DEFINE_bool(migrate_client,
             false,
             "(HQClient) Should the HQClient make two sets of requests and "
             "switch sockets in the middle.");
-DEFINE_bool(use_inplace_write,
-            false,
-            "Transport use inplace packet build and socket writing");
 
 DEFINE_bool(send_knob_frame,
             false,
@@ -333,10 +330,6 @@ void initializeTransportSettings(HQToolParams& hqUberParams) {
   }
   hqParams.transportSettings.connectUDP = FLAGS_connect_udp;
   hqParams.transportSettings.maxCwndInMss = FLAGS_max_cwnd_mss;
-  if (hqUberParams.mode == HQMode::SERVER && FLAGS_use_inplace_write) {
-    hqParams.transportSettings.dataPathType =
-        quic::DataPathType::ContinuousMemory;
-  }
   if (FLAGS_rate_limit >= 0) {
     CHECK(hqUberParams.mode == HQMode::SERVER);
     std::get<HQToolServerParams>(hqUberParams.params).rateLimitPerThread =
