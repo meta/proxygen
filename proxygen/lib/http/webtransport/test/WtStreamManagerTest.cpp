@@ -1174,6 +1174,15 @@ struct WtReadCallback : WtStreamManager::ReadCallback {
   bool signalled = false;
 };
 
+struct WtWriteCallback : WtStreamManager::WriteCallback {
+  ~WtWriteCallback() override = default;
+  void writeReady(WtWriteHandle&) noexcept override {
+    signalled = true;
+  }
+
+  bool signalled = false;
+};
+
 struct MockDeliveryCallback : WebTransport::ByteEventCallback {
   MOCK_METHOD(void, onByteEvent, (uint64_t, uint64_t), (noexcept, override));
   MOCK_METHOD(void,
@@ -1467,6 +1476,30 @@ TEST_F(WtStreamManagerTest, H02FinishedHandleRemainsConnFcBlocked) {
   // Before the fix, the FIN deleted writeHandle without removing its raw
   // address from connFcBlockedStreams_. MAX_DATA then dereferenced it.
   EXPECT_TRUE(streamManager->onMaxData(MaxConnData{WtConfig::kDefaultFc + 1}));
+}
+
+TEST_F(WtStreamManagerTest, WriteCallback) {
+  config = {.peerMaxConnData = 0,
+            .peerMaxStreamDataBidiLocal = 0,
+            .peerMaxStreamDataBidiRemote = 0,
+            .peerMaxStreamDataUni = 0};
+  reinit(config);
+  auto* wh = CHECK_NOTNULL(streamManager->createEgressHandle());
+  EXPECT_TRUE(wh->writeStreamData(makeBuf(1),
+                                  /*fin=*/false,
+                                  nullptr)
+                  .hasValue());
+  // level-triggered WriteCallback regardless of conn/stream-fc
+  WtWriteCallback writeCb;
+  streamManager->setWriteCb(*wh, &writeCb);
+  EXPECT_TRUE(std::exchange(writeCb.signalled, false));
+
+  // already installed callback; expect signalled
+  EXPECT_TRUE(wh->writeStreamData(makeBuf(1),
+                                  /*fin=*/true,
+                                  nullptr)
+                  .hasValue());
+  EXPECT_TRUE(writeCb.signalled);
 }
 
 } // namespace proxygen::coro::test

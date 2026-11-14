@@ -110,6 +110,7 @@ class QuicWtSessionBase
 
   struct StreamManagerCallback
       : public detail::WtStreamManager::ReadCallback
+      , public detail::WtStreamManager::WriteCallback
       , public detail::WtStreamManager::EgressCallback
       , public detail::WtStreamManager::IngressCallback {
     QuicWtSessionBase& sess;
@@ -117,6 +118,8 @@ class QuicWtSessionBase
     }
     void readReady(detail::WtStreamManager::WtReadHandle& rh,
                    uint64_t bytesRead) noexcept override;
+    void writeReady(
+        detail::WtStreamManager::WtWriteHandle& wh) noexcept override;
     void eventsAvailable() noexcept override;
     void onNewPeerStream(uint64_t streamId) noexcept override;
 
