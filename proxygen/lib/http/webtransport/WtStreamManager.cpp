@@ -212,14 +212,30 @@ struct WriteHandle : public WebTransport::StreamWriteHandle {
   void cancel(folly::exception_wrapper ex) noexcept;
   void onStopSending(uint32_t errCode) noexcept;
   void finish(bool done) noexcept;
+  void maybeNotifyWriteReady() noexcept;
 
   Accessor smAccessor_;
   WtBufferedStreamData bufferedSendData_;
   uint64_t err{kInvalidVarint};
+  WtStreamManager::WriteCallback* wcb_{nullptr};
   WritePromise promise_{emptyWritePromise()};
   WriteHandleState state_;
   WtStreamManager::BidiHandle* bidi_{nullptr}; // ptr to the owning BidiHandle /
                                                // symmetric wh
+};
+
+/**
+ * helper to keep the handles alive while executing something that may
+ * deallocate the handle inline. this is unfortunately a temporary solution
+ * until we migrate all users to QuicWtSession and make KeepAlive handles
+ * mandatory and held by the application on our behalf.
+ */
+struct KeepAlive {
+  struct WriteHandleDeleter {
+    void operator()(WriteHandle*) noexcept;
+  };
+  using WriteHandleKa = std::unique_ptr<WriteHandle, WriteHandleDeleter>;
+  static WriteHandleKa make(WriteHandle&) noexcept;
 };
 
 } // namespace
@@ -591,6 +607,13 @@ void WtStreamManager::setReadCb(WtReadHandle& rh, ReadCallback* rcb) noexcept {
   readhandle_ref_cast(rh).rcb_ = rcb;
 }
 
+void WtStreamManager::setWriteCb(WtWriteHandle& wh,
+                                 WriteCallback* wcb) noexcept {
+  auto& handle = writehandle_ref_cast(wh);
+  handle.wcb_ = wcb;
+  handle.maybeNotifyWriteReady();
+}
+
 uint64_t WtStreamManager::recvBytesAvail(
     const WtReadHandle& rh) const noexcept {
   return std::min(
@@ -915,6 +938,20 @@ auto WtStreamManager::toUserHandle(BidiStreamHandle bidi) const noexcept
 
 } // namespace proxygen::detail
 
+void KeepAlive::WriteHandleDeleter::operator()(WriteHandle* wh) noexcept {
+  auto* p = wh->bidi_;
+  if (p && --p->refs == 0) {
+    delete p;
+  }
+}
+
+/*static*/ KeepAlive::WriteHandleKa KeepAlive::make(WriteHandle& wh) noexcept {
+  KeepAlive::WriteHandleKa ka;
+  wh.bidi_->refs++;
+  ka.reset(&wh);
+  return ka;
+}
+
 /**
  * ReadHandle & WriteHandle implementations here
  */
@@ -1061,12 +1098,15 @@ WriteHandle::writeStreamData(std::unique_ptr<folly::IOBuf> data,
   XLOG(DBG6) << __func__ << "; id=" << id_ << "; len=" << len << "; fin=" << fin
              << "; connBlocked=" << connBlocked
              << "; streamBlocked=" << streamBlocked;
+  auto ka = KeepAlive::make(*this);
   if (bufferedSendData_.canSendData()) {
     if (bufferedSendData_.onlyFinPending()) {
       smAccessor_.finOnlyStreams().insert(this);
     }
     smAccessor_.onStreamWritable(*this); // stream is now writable
   }
+
+  maybeNotifyWriteReady(); // must be last, this can be deleted
   return streamBlocked ? FcState::BLOCKED : FcState::UNBLOCKED;
 }
 
@@ -1189,5 +1229,21 @@ void WriteHandle::finish(bool done) noexcept {
     smAccessor_.connFcBlockedStreams().erase(this);
     smAccessor_.writableStreams().erase(id_);
     smAccessor_.done(*this);
+  }
+}
+
+/**
+ * WriteCallback is only set in the "write bypass mode". We notify the callback
+ * iff set and there's pending data (regardless of available egress conn/stream
+ * flow control). The backing transport can uninstall the callback to simulate
+ * backpressure.
+ *
+ * NOTE: maybeNotifyWriteReady can trigger WriteHandle to be freed. The
+ * transport will likely invoke ::dequeue(WriteHandle&) inline from
+ * WriteCallback.
+ */
+void WriteHandle::maybeNotifyWriteReady() noexcept {
+  if (wcb_ && bufferedSendData_.hasData()) {
+    wcb_->writeReady(*this);
   }
 }
