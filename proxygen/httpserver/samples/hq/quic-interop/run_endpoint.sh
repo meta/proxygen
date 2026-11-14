@@ -31,7 +31,10 @@ PSK_FILE="" # in memory psk
 if [ -n "${TESTCASE}" ]; then
     case "${TESTCASE}" in
         "handshake") ;;
-        "multiconnect") ;;
+        "multiconnect")
+            # One connection per file
+            INVOCATIONS=${INVOCATIONS//,/ }
+            ;;
         "transfer")
             STREAM_FLOW_CONTROL="262144"
             CONN_FLOW_CONTROL="2621440"
@@ -43,11 +46,12 @@ if [ -n "${TESTCASE}" ]; then
             LOGLEVEL=1
         ;;
         "resumption")
-            INVOCATIONS=$(${INVOCATIONS//,/ })
+            # First file on one connection, the rest on a resumed one
+            INVOCATIONS="${INVOCATIONS%%,*} ${INVOCATIONS#*,}"
             PSK_FILE="/psk"
         ;;
         "zerortt")
-            INVOCATIONS=$(${INVOCATIONS//,/ })
+            INVOCATIONS="${INVOCATIONS%%,*} ${INVOCATIONS#*,}"
             PSK_FILE="/psk"
             EARLYDATA="true"
         ;;
