@@ -82,6 +82,7 @@ void DeviousBaton::start() {
     auto handle = wt_->createUniStream();
     if (!handle) {
       wt_->closeSession(uint32_t(BatonSessionError::DA_YAMN));
+      return;
     }
     auto id = handle.value()->getID();
     wt_->writeStreamData(id,
@@ -233,11 +234,12 @@ DeviousBaton::onBatonMessage(uint64_t inStreamId,
       break;
     }
   }
+  const uint8_t nextBaton = baton + 1;
   wt_->writeStreamData(outStreamId,
-                       makeBatonMessage(kStreamPadLen, baton + 1),
+                       makeBatonMessage(kStreamPadLen, nextBaton),
                        /*fin=*/true,
                        /*deliveryCallback=*/nullptr);
-  if (baton + 1 == 0) {
+  if (nextBaton == 0) {
     return WhoFinished::SELF;
   }
   return WhoFinished::NO_ONE;
@@ -247,11 +249,11 @@ void DeviousBaton::onBatonFinished(WhoFinished who, bool reset) {
   if (who == WhoFinished::NO_ONE) {
     return;
   }
-  activeBatons_--;
   if (activeBatons_ == 0) {
     closeSession(uint32_t(BatonSessionError::BRUH));
     return;
   }
+  activeBatons_--;
   if (reset) {
     resetBatons_++;
   } else {

@@ -85,7 +85,7 @@ TEST_P(DeviousBatonTest, Basic) {
   EXPECT_FALSE(res.hasError());
   EXPECT_TRUE(nextMessageFuture.isReady());
   auto nextMessage = std::move(nextMessageFuture).get();
-  EXPECT_CALL(*nextActorWt, closeSession(_));
+  EXPECT_CALL(*nextActorWt, closeSession(folly::Optional<uint32_t>()));
   DeviousBaton::BatonMessageState state;
   nextActor->onStreamData(
       nextMessage.id, state, std::move(nextMessage.message), true);
