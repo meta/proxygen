@@ -265,6 +265,12 @@ class DeviousBatonClient {
     // Calculate the new baton value
     const newBatonValue = (batonValue + 1) % 256;
 
+    // Sending 0 also finishes the baton. The peer closes the session when it
+    // receives the last one, so count it before the close can arrive.
+    if (newBatonValue === 0) {
+      this.activebatons--;
+    }
+
     // Send datagram if baton value meets the condition
     if (batonValue % 7 === 1) {
       await this.sendDatagram(batonValue);
@@ -280,7 +286,10 @@ class DeviousBatonClient {
       stream = await this.transport.createBidirectionalStream();
       outgoingStream = stream.writable;
       outgoingStreamType = "bidirectional-self";
-      this.handleIncomingStream(stream, stream.readable, outgoingStreamType);
+      // The peer does not reply to a 0
+      if (newBatonValue !== 0) {
+        this.handleIncomingStream(stream, stream.readable, outgoingStreamType);
+      }
     } else if (incomingStreamType === "bidirectional") {
       // If baton arrived on peer-initiated bidirectional stream, use the same stream
       stream = incomingStream;
