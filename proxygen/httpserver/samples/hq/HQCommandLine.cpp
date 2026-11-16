@@ -209,6 +209,9 @@ DEFINE_bool(advertise_scone_support,
 DEFINE_bool(enable_scone_send,
             false,
             "Send SCONE packets when peer advertised scone_supported");
+DEFINE_bool(reliable_stream_reset,
+            true,
+            "Advertise RESET_STREAM_AT support, which WebTransport requires");
 DEFINE_uint32(client_cid_length, 0, "Client Connection ID length in bytes");
 DEFINE_bool(
     delay_stream_fin,
@@ -400,6 +403,8 @@ void initializeTransportSettings(HQToolParams& hqUberParams) {
         FLAGS_send_draft02_ack_receive_timestamps;
   }
   hqParams.transportSettings.datagramConfig.enabled = true;
+  hqParams.transportSettings.advertisedReliableResetStreamSupport =
+      FLAGS_reliable_stream_reset;
 
   hqParams.transportSettings.initiateKeyUpdate = FLAGS_initiate_key_updates;
   hqParams.transportSettings.keyUpdatePacketCountInterval =
