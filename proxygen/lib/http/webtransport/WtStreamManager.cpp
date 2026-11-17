@@ -63,6 +63,7 @@
 
 #include <proxygen/lib/http/webtransport/WtStreamManager.h>
 
+#include <algorithm>
 #include <deque>
 #include <folly/logging/xlog.h>
 
@@ -373,6 +374,72 @@ uint64_t& WtStreamManager::MaxStreamsContainer::getMaxStreams(
     uint64_t streamId) noexcept {
   return maxStreams_[streamType(streamId)];
 }
+
+/**
+ * Tracks closed streams to prevent attempts at creating streams that have
+ * already been closed. Some transports (e.g. quic) already provide this
+ * facility on our behalf, but for http/2 and/or QMux we need to track closed
+ * streams ourselves.
+ *
+ * This is a simple implementation of an IntervalSet. We have four deques per
+ * stream type (i.e. client bidi, client uni, server bidi, server uni). Based on
+ * the stream being closed, we insert it into its respective deque.
+ *
+ * NOTE:
+ *  - maybe switch to quic::IntervalSet?
+ *  - large-ish size overhead due to four std::deques
+ */
+struct WtStreamManager::ClosedStreams {
+  struct Interval {
+    int64_t start{-1}; // inclusive
+    int64_t end{-1};   // inclusive
+
+    [[nodiscard]] bool within(int64_t value) const noexcept {
+      return start <= value && value <= end;
+    }
+  };
+
+  ClosedStreams() noexcept {
+    // insert dummy head ({-inf, -inf}) & tail ({inf, inf}) to remove edge-cases
+    // and simplify ::add & ::contains
+    constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
+    constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
+    for (auto& deque : closedStreams) {
+      deque.push_front({kMin, kMin});
+      deque.push_back({kMax, kMax});
+    }
+  }
+
+  void add(uint64_t streamId) noexcept {
+    auto& deque = closedStreams[streamType(streamId)];
+    const auto id = static_cast<int64_t>(streamId >> 2);
+    Interval interval{.start = id, .end = id};
+    auto it = std::ranges::lower_bound(deque, id, {}, &Interval::start);
+    XCHECK_NE(it, deque.end());
+    it = deque.insert(it, interval); // insert after
+    // potentially merge std::prev(), it, & std::next()
+    for (int8_t idx = 0; idx < 2; idx++) {
+      auto prev = std::prev(it);
+      const bool adjacent = prev->end == it->start - 1;
+      if (adjacent) {
+        prev->end = it->end;
+        it = std::prev(deque.erase(it));
+      }
+      it++;
+    }
+  }
+
+  [[nodiscard]] bool contains(uint64_t streamId) const noexcept {
+    const auto& deque = closedStreams[streamType(streamId)];
+    const auto id = static_cast<int64_t>(streamId >> 2);
+    auto it =
+        std::prev(std::ranges::upper_bound(deque, id, {}, &Interval::start));
+    XCHECK_NE(it, deque.end());
+    return it->within(id);
+  }
+
+  std::array<std::deque<Interval>, StreamType::Max> closedStreams;
+};
 
 WtStreamManager::WtStreamManager(WtDir dir,
                                  const WtConfig& config,
@@ -817,77 +884,6 @@ WtStreamManager::WtWriteHandle* WtStreamManager::nextWritable() const noexcept {
              << "; connSendFc.avail=" << connSendFc_.getAvailable();
   return (wh && connSendFc_.getAvailable() > 0) ? wh : nullptr;
 }
-
-/**
- * Tracks closed streams to prevent attempts at creating streams that have
- * already been closed. Some transports (e.g. quic) already provide this
- * facility on our behalf, but for http/2 and/or QMux we need to track closed
- * streams ourselves.
- *
- * This is a simple implementation of an IntervalSet. We have four deques per
- * stream type (i.e. client bidi, client uni, server bidi, server uni). Based on
- * the stream being closed, we insert it into its respective deque.
- *
- * NOTE:
- *  - maybe switch to quic::IntervalSet?
- *  - large-ish size overhead due to four std::deques
- */
-struct WtStreamManager::ClosedStreams {
-  struct Interval {
-    int64_t start{-1}; // inclusive
-    int64_t end{-1};   // inclusive
-
-    [[nodiscard]] bool within(int64_t value) const noexcept {
-      return start <= value && value <= end;
-    }
-
-    bool operator<(const Interval& other) const noexcept {
-      return start < other.start;
-    }
-  };
-
-  ClosedStreams() noexcept {
-    // insert dummy head ({-inf, -inf}) & tail ({inf, inf}) to remove edge-cases
-    // and simplify ::add & ::contains
-    constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
-    constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
-    for (auto& deque : closedStreams) {
-      deque.push_front({kMin, kMin});
-      deque.push_back({kMax, kMax});
-    }
-  }
-
-  void add(uint64_t streamId) noexcept {
-    auto& deque = closedStreams[streamType(streamId)];
-    const int64_t id = streamId >> 2;
-    Interval interval{id, id};
-    auto it = std::lower_bound(deque.begin(), deque.end(), interval);
-    XCHECK_NE(it, deque.end());
-    it = deque.insert(it, interval); // insert after
-    // potentially merge std::prev(), it, & std::next()
-    for (int8_t idx = 0; idx < 2; idx++) {
-      auto prev = std::prev(it);
-      const bool adjacent = prev->end == it->start - 1;
-      if (adjacent) {
-        prev->end = it->end;
-        it = std::prev(deque.erase(it));
-      }
-      it++;
-    }
-  }
-
-  [[nodiscard]] bool contains(uint64_t streamId) const noexcept {
-    const auto& deque = closedStreams[streamType(streamId)];
-    const int64_t id = streamId >> 2;
-    Interval interval{.start = id, .end = id};
-    auto it =
-        std::prev(std::upper_bound(deque.cbegin(), deque.cend(), interval));
-    XCHECK_NE(it, deque.end());
-    return it->within(id);
-  }
-
-  std::array<std::deque<Interval>, StreamType::Max> closedStreams;
-};
 
 bool WtStreamManager::isClosed(uint64_t streamId) const noexcept {
   return closedStreams_ ? closedStreams_->contains(streamId) : false;
