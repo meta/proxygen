@@ -1560,6 +1560,13 @@ class HTTPTransaction
     return connectUdpStream_;
   }
 
+  /**
+   * Transaction-owned WebTransport API for existing integrations.
+   *
+   * Do not use this accessor for new integrations. Use sendWtHeaders() with a
+   * WebTransportHandler, which receives a shared WebTransport session through
+   * onWebTransportSession().
+   */
   WebTransportImpl* getWebTransport() {
     if (!isWebTransportConnectStream()) {
       return nullptr;
