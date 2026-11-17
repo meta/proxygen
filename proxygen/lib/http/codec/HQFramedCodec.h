@@ -347,7 +347,7 @@ class HQFramedCodec : public HTTPCodec {
   size_t bufferPayload(folly::io::Cursor& cursor, size_t bufLen);
 
   // Current frame state
-  size_t pendingDataFrameBytes_{0};
+  decltype(FrameHeader::length) pendingDataFrameBytes_{0};
   folly::IOBufQueue pendingPayload_{folly::IOBufQueue::cacheChainLength()};
 
 #ifndef NDEBUG

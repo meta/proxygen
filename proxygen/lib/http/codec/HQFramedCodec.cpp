@@ -201,7 +201,8 @@ size_t HQFramedCodec::onFramedIngress(const IOBuf& buf) {
       }
     } else if (bufLen > 0 &&
                frameState_ == FrameState::FRAME_PAYLOAD_STREAMING) {
-      const auto chunkLen = std::min(pendingDataFrameBytes_, bufLen);
+      const size_t chunkLen =
+          std::min<uint64_t>(pendingDataFrameBytes_, bufLen);
       if (curHeader_.type == FrameType::DATA) {
         FrameHeader auxDataFrameHeader;
         auxDataFrameHeader.type = FrameType::DATA;

@@ -382,7 +382,9 @@ void HQCodecTestFixture<T>::qpackTest(bool blocked) {
   upstreamCodec_->generateEOM(queue_, streamId);
   auto consumed = downstreamCodec_->onIngress(*queue_.front());
   EXPECT_EQ(pauses, blocked ? 1 : 0);
-  EXPECT_TRUE(blocked || consumed == queue_.chainLength());
+  if (!blocked) {
+    EXPECT_EQ(consumed, queue_.chainLength());
+  }
   queue_.trimStart(consumed);
   EXPECT_EQ(callbacks_.streamErrors, 0);
   EXPECT_EQ(callbacks_.sessionErrors, 0);
@@ -1126,6 +1128,35 @@ TEST_F(HQCodecTest, HeadersFrameLargerThanHeaderListLimit) {
   EXPECT_EQ(callbacks_.sessionErrors, 0);
   EXPECT_EQ(callbacks_.lastParseError->getHttp3ErrorCode(),
             HTTP3::ErrorCode::HTTP_QPACK_DECOMPRESSION_FAILED);
+}
+
+TEST_F(HQCodecTest, DataFrameLongerThan32Bits) {
+  constexpr uint64_t kLength = (uint64_t{1} << 32) + 5;
+  writeValidFrame(queue_, FrameType::HEADERS);
+  writeFrameHeaderManual(
+      queue_, static_cast<uint64_t>(FrameType::DATA), kLength);
+  // Send the payload 1MB at a time so each ingress chain fits in a 32-bit
+  // size_t. If the codec ends the frame early, the leftover 0xff bytes parse
+  // as a huge unknown frame that swallows the trailers.
+  static const std::string kChunk(1 << 20, '\xff');
+  for (uint64_t remaining = kLength; remaining > 0;) {
+    const size_t len = std::min<uint64_t>(remaining, kChunk.size());
+    queue_.append(IOBuf::wrapBuffer(kChunk.data(), len));
+    parse();
+    remaining -= len;
+  }
+  HTTPHeaders trailers;
+  trailers.add("x-trailer-1", "pico-de-gallo");
+  upstreamCodec_->generateTrailers(queue_, streamId_, trailers);
+  parse();
+  downstreamCodec_->onIngressEOF();
+
+  EXPECT_TRUE(queue_.empty());
+  EXPECT_EQ(callbacks_.headersComplete, 1);
+  EXPECT_EQ(callbacks_.trailers, 1);
+  EXPECT_EQ(callbacks_.messageComplete, 1);
+  EXPECT_EQ(callbacks_.streamErrors, 0);
+  EXPECT_EQ(callbacks_.sessionErrors, 0);
 }
 
 struct FrameAllowedParams {
