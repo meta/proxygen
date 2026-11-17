@@ -202,15 +202,34 @@ struct WtStreamManager {
   BidiStreamHandle createBidiHandle() noexcept;
 
   /**
-   * per-stream callbacks that may be useful to transports that support stream
-   * multiplexing (e.g. quic)
+   * Per-stream callbacks that may be useful to transports that support stream
+   * multiplexing (e.g. quic). ReadCallback::readReady is invoked when the
+   * application has consumed bytes from the ReadHandle via
+   * `ReadHandle::readStreamData()`.
    */
   struct ReadCallback {
     virtual ~ReadCallback() noexcept = default;
-    // invoked when the app consumed bytesRead, freeing buffer space
     virtual void readReady(WtReadHandle&, uint64_t bytesRead) noexcept = 0;
   };
   void setReadCb(WtReadHandle& rh, ReadCallback* rcb) noexcept;
+
+  /**
+   * Per-stream callback that may be useful to transports that support stream
+   * multiplexing (e.g. quic). WriteCallback::writeReady is invoked when the
+   * WriteHandle has buffered data irrespective of egress conn/stream flow
+   * control. The backing transport should invoke `::setWriteCb(WriteHandle&,
+   * nullptr)` to signal backpressure.
+   *
+   * NOTE: ::setWriteCb is level-triggered, if there is data buffered the
+   * WriteCallback will immediately be notified inline. Consequently, the
+   * WriteHandle may be freed by a subsequent inline `::dequeue(WriteHandle&)`
+   * and should not be used after.
+   */
+  struct WriteCallback {
+    virtual ~WriteCallback() noexcept = default;
+    virtual void writeReady(WtWriteHandle&) noexcept = 0;
+  };
+  void setWriteCb(WtWriteHandle& wh, WriteCallback* wcb) noexcept;
 
   // returns min(recv_conn_fc_avail, recv_stream_fc_avail)
   [[nodiscard]] uint64_t recvBytesAvail(const WtReadHandle& rh) const noexcept;
