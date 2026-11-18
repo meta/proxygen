@@ -8,8 +8,8 @@
 
 #pragma once
 
-namespace proxygen::coro {
+namespace proxygen::trustbundle {
 
-const char* getFallbackCAPath();
+const char* getBundledPEM();
 
-} // namespace proxygen::coro
+} // namespace proxygen::trustbundle

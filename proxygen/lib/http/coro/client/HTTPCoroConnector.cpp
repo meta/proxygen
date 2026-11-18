@@ -8,7 +8,6 @@
 
 #include "proxygen/lib/http/coro/client/HTTPCoroConnector.h"
 #include "proxygen/lib/http/coro/client/CertVerificationHooks.h"
-#include "proxygen/lib/http/coro/client/TLS.h"
 #include <folly/logging/xlog.h>
 #include <proxygen/lib/http/codec/H3EarlyDataHandler.h>
 
@@ -636,9 +635,6 @@ static std::vector<std::string> getDefaultCAPath() {
   } else if (const char* curlCABundle = std::getenv("CURL_CA_BUNDLE");
              curlCABundle && *curlCABundle) {
     return {curlCABundle};
-  } else if (const char* fallbackPath = getFallbackCAPath();
-             fallbackPath && *fallbackPath) {
-    return {fallbackPath};
   }
   return {};
 }
@@ -866,22 +862,31 @@ HTTPCoroConnector::makeFizzCertVerifier(const TLSParams& params) {
   }
 
   Error err;
-  if (caPaths.empty()) {
-    FIZZ_THROW_ON_ERROR(err.error("HTTPCoroConnector::makeFizzCertVerifier "
-                                  "could not find suitable trust anchor store"),
-                        err);
+  std::unique_ptr<fizz::DefaultCertificateVerifier> verifier;
+  if (!caPaths.empty()) {
+    if (auto result = fizz::DefaultCertificateVerifier::createFromCAFiles(
+            verifier, err, fizz::VerificationContext::Client, caPaths);
+        result != Status::Success) {
+      FIZZ_THROW_ON_ERROR(err.error(fmt::format(
+                              "HTTPCoroConnector::makeFizzCertVerifier failed "
+                              "to initialize TLS trust anchors: {}",
+                              err.msg())),
+                          err);
+    }
+    return verifier;
   }
 
-  std::unique_ptr<fizz::DefaultCertificateVerifier> verifier;
-  if (auto result = fizz::DefaultCertificateVerifier::createFromCAFiles(
-          verifier, err, fizz::VerificationContext::Client, caPaths);
-      result != Status::Success) {
-    FIZZ_THROW_ON_ERROR(err.error(fmt::format(
-                            "HTTPCoroConnector::makeFizzCertVerifier failed to "
-                            "initialize TLS trust anchors: {}",
-                            err.msg())),
-                        err);
+  // If control flow reaches here, this means that the user
+  // did not specify a valid CA path. To prevent insecure
+  // verification, we will use the default, build-time defined
+  // verifier
+  if (auto fallbackVerifier = getFallbackVerifier()) {
+    return fallbackVerifier;
   }
+
+  FIZZ_THROW_ON_ERROR(err.error("HTTPCoroConnector::makeFizzCertVerifier "
+                                "requires ca Path or ca Bundle."),
+                      err);
   return verifier;
 }
 

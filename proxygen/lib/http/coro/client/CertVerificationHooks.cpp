@@ -10,7 +10,36 @@
 
 #include <stdexcept>
 
+#include <fizz/protocol/DefaultCertificateVerifier.h>
+#include <fizz/util/Status.h>
+#include <fmt/format.h>
+#include <folly/Range.h>
+#include <folly/ssl/OpenSSLCertUtils.h>
+
+#include "proxygen/lib/http/coro/client/BundledCA.h"
+
 namespace proxygen::coro {
+
+std::shared_ptr<const fizz::CertificateVerifier> getFallbackVerifier() {
+  fizz::Error err;
+  std::unique_ptr<fizz::DefaultCertificateVerifier> verifier;
+  const char* bundle = trustbundle::getBundledPEM();
+  if (auto result = fizz::DefaultCertificateVerifier::create(
+          verifier,
+          err,
+          fizz::VerificationContext::Client,
+          folly::ssl::OpenSSLCertUtils::readStoreFromBuffer(
+              folly::StringPiece(bundle)));
+      result != fizz::Status::Success) {
+    FIZZ_THROW_ON_ERROR(
+        err.error(fmt::format(
+            "HTTPCoroConnector::makeFizzCertVerifier failed "
+            "to initialize TLS trust anchors with fallback CA bundle: {}",
+            err.msg())),
+        err);
+  }
+  return verifier;
+}
 
 CertVerifyLogFn getCertVerifyLogFn() noexcept {
   return nullptr;

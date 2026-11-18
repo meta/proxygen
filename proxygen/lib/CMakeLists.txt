@@ -200,3 +200,16 @@ install(
 
 add_subdirectory(test)
 add_subdirectory(http/coro/client/samples/cocurl)
+
+# Generate fallback CA Bundle using Mozilla roots
+set(PROXYGEN_FALLBACK_CA_BUNDLE ${CMAKE_CURRENT_SOURCE_DIR}/ssl/trustbundle/MozillaRoots.pem)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PROXYGEN_FALLBACK_CA_BUNDLE})
+file(READ ${PROXYGEN_FALLBACK_CA_BUNDLE} CA_BUNDLE)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/http/coro/client/BundledCA.cpp.in
+    ${PROXYGEN_GENERATED_ROOT}/proxygen/lib/http/coro/client/BundledCA.cpp
+    @ONLY
+)
+target_sources(proxygen_http_coro_client_http_connector_obj PRIVATE
+    ${PROXYGEN_GENERATED_ROOT}/proxygen/lib/http/coro/client/BundledCA.cpp
+)

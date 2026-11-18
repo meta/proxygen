@@ -8,7 +8,10 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
+
+#include <fizz/protocol/CertificateVerifier.h>
 
 #include "proxygen/lib/http/coro/client/HTTPCoroConnector.h"
 #include "proxygen/lib/http/coro/client/ProxygenCertVerifier.h"
@@ -19,5 +22,7 @@ std::optional<ValidationPolicy> getValidationPolicy(
     HTTPCoroConnector::IdentityValidation identityValidation);
 
 CertVerifyLogFn getCertVerifyLogFn() noexcept;
+
+std::shared_ptr<const fizz::CertificateVerifier> getFallbackVerifier();
 
 } // namespace proxygen::coro
