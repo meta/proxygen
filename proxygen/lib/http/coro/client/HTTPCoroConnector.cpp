@@ -24,6 +24,7 @@
 #include <fizz/protocol/CertificateVerifier.h>
 #include <fizz/protocol/DefaultCertificateVerifier.h>
 #include <folly/FileUtil.h>
+#include <folly/Indestructible.h>
 #include <folly/SocketAddress.h>
 #include <folly/coro/Collect.h>
 #include <folly/coro/SharedPromise.h>
@@ -236,6 +237,59 @@ void setupSession(CoroSessionHandle session,
   session->run().start();
 }
 
+static std::vector<std::string> getDefaultCAPath() {
+  if (const char* envPath = std::getenv("PROXYGEN_CORO_CA_PATH");
+      envPath && *envPath) {
+    return {envPath};
+  } else if (const char* curlCABundle = std::getenv("CURL_CA_BUNDLE");
+             curlCABundle && *curlCABundle) {
+    return {curlCABundle};
+  }
+  return {};
+}
+
+static std::shared_ptr<const fizz::CertificateVerifier> createFizzCertVerifier(
+    std::vector<std::string> caPaths) {
+  if (caPaths.empty()) {
+    caPaths = getDefaultCAPath();
+  }
+
+  Error err;
+  std::unique_ptr<fizz::DefaultCertificateVerifier> verifier;
+  if (!caPaths.empty()) {
+    if (auto result = fizz::DefaultCertificateVerifier::createFromCAFiles(
+            verifier, err, fizz::VerificationContext::Client, caPaths);
+        result != Status::Success) {
+      FIZZ_THROW_ON_ERROR(err.error(fmt::format(
+                              "HTTPCoroConnector::makeFizzCertVerifier failed "
+                              "to initialize TLS trust anchors: {}",
+                              err.msg())),
+                          err);
+    }
+    return verifier;
+  }
+
+  // If control flow reaches here, this means that the user
+  // did not specify a valid CA path. To prevent insecure
+  // verification, we will use the default, build-time defined
+  // verifier
+  if (auto fallbackVerifier = getFallbackVerifier()) {
+    return fallbackVerifier;
+  }
+
+  FIZZ_THROW_ON_ERROR(err.error("HTTPCoroConnector::makeFizzCertVerifier "
+                                "requires ca Path or ca Bundle."),
+                      err);
+  return verifier;
+}
+
+folly::Indestructible<std::shared_ptr<const fizz::CertificateVerifier>>
+    DEFAULT_VERIFIER(createFizzCertVerifier(getDefaultCAPath()));
+
+std::shared_ptr<const fizz::CertificateVerifier> getDefaultCertVerifier() {
+  return *DEFAULT_VERIFIER;
+}
+
 folly::coro::Task<std::unique_ptr<CoroTransportIf>> connectFizz(
     folly::EventBase* eventBase,
     folly::SocketAddress connectAddr,
@@ -267,19 +321,23 @@ folly::coro::Task<std::unique_ptr<CoroTransportIf>> connectFizz(
     expectedIdentity = ExpectedIdentity::expectDNS(connParams.serverName);
     sendSNI = connParams.serverName;
   }
-  if (!connParams.fizzContextAndVerifier.fizzCertVerifier) {
-    throw std::invalid_argument(
-        "HTTPCoroConnector::connectFizz requires a non-null fizzCertVerifier.");
-  }
-  std::shared_ptr<const fizz::CertificateVerifier> proxygenVerifier;
-  if (const auto policy = getValidationPolicy(connParams.identityValidation)) {
-    proxygenVerifier =
-        makeVerifier(connParams.fizzContextAndVerifier.fizzCertVerifier,
-                     std::move(expectedIdentity.value()),
-                     *policy,
-                     getCertVerifyLogFn());
+  std::shared_ptr<const fizz::CertificateVerifier> certVerifier;
+
+  // If a custom verifier is provided, use it directly.
+  if (connParams.fizzContextAndVerifier.fizzCertVerifier) {
+    certVerifier = connParams.fizzContextAndVerifier.fizzCertVerifier;
+
+    // Otherwise, use the default certificate verifier and apply the identity
+    // validation policy based on client configuration.
   } else {
-    proxygenVerifier = connParams.fizzContextAndVerifier.fizzCertVerifier;
+    certVerifier = getDefaultCertVerifier();
+    if (const auto policy =
+            getValidationPolicy(connParams.identityValidation)) {
+      certVerifier = makeVerifier(std::move(certVerifier),
+                                  std::move(expectedIdentity.value()),
+                                  *policy,
+                                  getCertVerifyLogFn());
+    }
   }
   if (connectStream) {
     folly::AsyncTransportWrapper::UniquePtr asyncTransport{
@@ -288,7 +346,7 @@ folly::coro::Task<std::unique_ptr<CoroTransportIf>> connectFizz(
         new AsyncFizzClient(std::move(asyncTransport),
                             connParams.fizzContextAndVerifier.fizzContext));
     fizzClient->connect(&cb,
-                        proxygenVerifier,
+                        certVerifier,
                         std::move(sendSNI),
                         pskIdentity,
                         folly::none, /* echConfigs */
@@ -298,7 +356,7 @@ folly::coro::Task<std::unique_ptr<CoroTransportIf>> connectFizz(
         eventBase, connParams.fizzContextAndVerifier.fizzContext));
     fizzClient->connect(connectAddr,
                         &cb,
-                        proxygenVerifier,
+                        certVerifier,
                         std::move(sendSNI),
                         pskIdentity,
                         timeoutMs, /* total timeout */
@@ -628,17 +686,6 @@ folly::coro::Task<CoroSessionHandle> connectImpl(
   co_return session;
 }
 
-static std::vector<std::string> getDefaultCAPath() {
-  if (const char* envPath = std::getenv("PROXYGEN_CORO_CA_PATH");
-      envPath && *envPath) {
-    return {envPath};
-  } else if (const char* curlCABundle = std::getenv("CURL_CA_BUNDLE");
-             curlCABundle && *curlCABundle) {
-    return {curlCABundle};
-  }
-  return {};
-}
-
 } // namespace
 
 namespace proxygen::coro {
@@ -856,38 +903,18 @@ HTTPCoroConnector::makeFizzClientContext(const TLSParams& params) {
 
 std::shared_ptr<const fizz::CertificateVerifier>
 HTTPCoroConnector::makeFizzCertVerifier(const TLSParams& params) {
-  std::vector<std::string> caPaths = params.caPaths;
-  if (caPaths.empty()) {
-    caPaths = getDefaultCAPath();
-  }
+  return createFizzCertVerifier(params.caPaths);
+}
 
-  Error err;
-  std::unique_ptr<fizz::DefaultCertificateVerifier> verifier;
-  if (!caPaths.empty()) {
-    if (auto result = fizz::DefaultCertificateVerifier::createFromCAFiles(
-            verifier, err, fizz::VerificationContext::Client, caPaths);
-        result != Status::Success) {
-      FIZZ_THROW_ON_ERROR(err.error(fmt::format(
-                              "HTTPCoroConnector::makeFizzCertVerifier failed "
-                              "to initialize TLS trust anchors: {}",
-                              err.msg())),
-                          err);
-    }
-    return verifier;
-  }
-
+HTTPCoroConnector::FizzContextAndVerifier
+HTTPCoroConnector::FizzContextAndVerifier::createWithContext(
+    const TLSParams& params) {
   // If control flow reaches here, this means that the user
   // did not specify a valid CA path. To prevent insecure
   // verification, we will use the default, build-time defined
   // verifier
-  if (auto fallbackVerifier = getFallbackVerifier()) {
-    return fallbackVerifier;
-  }
-
-  FIZZ_THROW_ON_ERROR(err.error("HTTPCoroConnector::makeFizzCertVerifier "
-                                "requires ca Path or ca Bundle."),
-                      err);
-  return verifier;
+  return {.fizzContext = HTTPCoroConnector::makeFizzClientContext(params),
+          .fizzCertVerifier = nullptr};
 }
 
 HTTPCoroConnector::FizzContextAndVerifier
