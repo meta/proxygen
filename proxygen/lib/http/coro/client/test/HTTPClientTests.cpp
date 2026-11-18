@@ -198,6 +198,57 @@ class CountingRequestData : public folly::RequestData {
 
 namespace proxygen::coro::test {
 
+TEST(HTTPCoroConnectorFactories, CreateWithoutVerifier) {
+  using FizzContextAndVerifier = HTTPCoroConnector::FizzContextAndVerifier;
+
+  auto defaultContext = FizzContextAndVerifier::create();
+  EXPECT_NE(defaultContext.fizzContext, nullptr);
+  EXPECT_EQ(defaultContext.fizzCertVerifier, nullptr);
+
+  TLSParams tlsParams;
+  auto tlsContext = createWithContext(tlsParams);
+  EXPECT_NE(tlsContext.fizzContext, nullptr);
+  EXPECT_EQ(tlsContext.fizzCertVerifier, nullptr);
+
+  auto context = HTTPCoroConnector::makeFizzClientContext(tlsParams);
+  auto providedContext = FizzContextAndVerifier::createWithContext(context);
+  EXPECT_EQ(providedContext.fizzContext, context);
+  EXPECT_EQ(providedContext.fizzCertVerifier, nullptr);
+}
+
+TEST(HTTPCoroConnectorFactories, PreserveProvidedVerifier) {
+  using FizzContextAndVerifier = HTTPCoroConnector::FizzContextAndVerifier;
+
+  TLSParams tlsParams;
+  auto context = HTTPCoroConnector::makeFizzClientContext(tlsParams);
+  auto verifier =
+      std::make_shared<InsecureVerifierDangerousDoNotUseInProduction>();
+
+  auto providedContext =
+      FizzContextAndVerifier::createWithContextAndVerifier(context, verifier);
+  EXPECT_EQ(providedContext.fizzContext, context);
+  EXPECT_EQ(providedContext.fizzCertVerifier, verifier);
+
+  auto createdContext = createWithContextAndVerifier(tlsParams, verifier);
+  EXPECT_NE(createdContext.fizzContext, nullptr);
+  EXPECT_EQ(createdContext.fizzCertVerifier, verifier);
+}
+
+TEST(HTTPCoroConnectorFactories, CreateVerifierFromCAPaths) {
+  auto ca = fizz::test::createCert(
+      "Test Root CA", /*ca=*/true, /*issuer=*/nullptr, fizz::KeyType::P256);
+  folly::test::TemporaryDirectory tmpDir;
+  auto caPath = (tmpDir.path() / "ca.pem").string();
+  ASSERT_TRUE(folly::writeFile(
+      folly::ssl::OpenSSLCertUtils::pemEncode(*ca.cert), caPath.c_str()));
+
+  TLSParams tlsParams;
+  tlsParams.caPaths = {caPath};
+  auto result = createWithContextAndVerifier(tlsParams);
+  EXPECT_NE(result.fizzContext, nullptr);
+  EXPECT_NE(result.fizzCertVerifier, nullptr);
+}
+
 CO_TEST_P_X(HTTPClientTests, ConnectorConnect) {
   HTTPCoroConnector::ConnectionParams connParams;
   HTTPCoroConnector::SessionParams sessParams;
@@ -316,14 +367,13 @@ CO_TEST_P_X(HTTPClientTests, IdentityVerificationE2E) {
     tlsParams.nextProtocols = {"h2", "http/1.1"};
     HTTPCoroConnector::ConnectionParams connParams;
     connParams.serverName = sni;
-    connParams.fizzContextAndVerifier =
-        HTTPCoroConnector::FizzContextAndVerifier::createWithContext(tlsParams);
     // The generated CA does not exist when the process-wide verifier loads.
-    connParams.fizzContextAndVerifier.fizzCertVerifier =
+    connParams.fizzContextAndVerifier = createWithContextAndVerifier(
+        tlsParams,
         makeVerifier(HTTPCoroConnector::makeFizzCertVerifier(tlsParams),
                      ExpectedIdentity::expectDNS(sni),
                      ValidationPolicy::Enforcing,
-                     {});
+                     {}));
     return HTTPCoroConnector_connect(
         &evb_, serverAddr, seconds(1), std::move(connParams));
   };

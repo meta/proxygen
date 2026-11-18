@@ -124,10 +124,21 @@ class HTTPCoroConnector {
   }
 
   struct FizzContextAndVerifier {
-    // Uses the process-wide default verifier when no verifier is supplied.
-    static FizzContextAndVerifier createWithContext(const TLSParams& params);
+    static FizzContextAndVerifier create();
+    static FizzContextAndVerifier createWithContext(
+        std::shared_ptr<const fizz::client::FizzClientContext> context);
+    static FizzContextAndVerifier createWithContextAndVerifier(
+        std::shared_ptr<const fizz::client::FizzClientContext> context,
+        std::shared_ptr<const fizz::CertificateVerifier> verifier);
 
     std::shared_ptr<const fizz::client::FizzClientContext> fizzContext;
+
+    // A `fizz::CertificateVerifier`, if supplied, indicates that you, the
+    // caller, are taking responsibility for *correctly* implementing
+    // certificate and identity verification.
+    //
+    // Otherwise, the proxygen coro library, upon connect,
+    // may use a default certificate verifier implementation.
     std::shared_ptr<const fizz::CertificateVerifier> fizzCertVerifier;
   };
 
@@ -188,6 +199,8 @@ class HTTPCoroConnector {
     // Next protocol for plaintext (TCP) connections
     std::string plaintextProtocol;
 
+    // Identity validation policy will be applied to process wide default cert
+    // verifier.
     IdentityValidation identityValidation{IdentityValidation::Logging};
   };
 
@@ -270,6 +283,18 @@ class HTTPCoroConnector {
       const QuicConnectionParams& connParams,
       const SessionParams& sessionParams = defaultSessionParams());
 };
+
+// When no certificate verifier is set by user, and default process wide
+// verifier will be used.
+HTTPCoroConnector::FizzContextAndVerifier createWithContext(
+    const HTTPCoroConnector::TLSParams& params);
+
+HTTPCoroConnector::FizzContextAndVerifier createWithContextAndVerifier(
+    const HTTPCoroConnector::TLSParams& params,
+    std::shared_ptr<const fizz::CertificateVerifier> verifier);
+
+HTTPCoroConnector::FizzContextAndVerifier createWithContextAndVerifier(
+    const HTTPCoroConnector::TLSParams& params);
 
 } // namespace coro
 } // namespace proxygen
