@@ -477,7 +477,13 @@ TEST_P(HTTPDownstreamSessionTest, Simple) {
       });
 
   evb_.loop();
-  expectResponse(id, 200);
+  expectResponseHeaders(
+      id, [](HTTPCodec::StreamID, std::shared_ptr<HTTPMessage> response) {
+        EXPECT_EQ(response->getStatusCode(), 200);
+        EXPECT_FALSE(response->getHeaders().exists(HTTP_HEADER_PRIORITY));
+      });
+  expectResponseBody(id);
+  expectResponseEOM(id);
   parseOutput();
 }
 
@@ -3887,6 +3893,10 @@ TEST_P(HQDownstreamSessionTest, onPriorityHeaderUrgency) {
   auto id = sendRequestHeader(req, true, true);
   muxTransport_->socketDriver_.expectSetPriority(
       id, quic::HTTPPriorityQueue::Priority(1, false));
+  EXPECT_CALL(*muxTransport_->getSocket(), getStreamPriority(id))
+      .WillOnce(Return(
+          quic::Expected<quic::PriorityQueue::Priority, quic::LocalErrorCode>{
+              quic::HTTPPriorityQueue::Priority(1, false)}));
 
   auto handler =
       addSimpleStrictHandler([this](folly::EventBase *evb,
@@ -3900,7 +3910,42 @@ TEST_P(HQDownstreamSessionTest, onPriorityHeaderUrgency) {
 
   transport_->addReadEvent(id, writeBuf_.move(), true);
   evb_.loop();
-  expectResponse(id, 200);
+  expectResponseHeaders(
+      id, [](HTTPCodec::StreamID, std::shared_ptr<HTTPMessage> response) {
+        EXPECT_EQ(response->getStatusCode(), 200);
+        EXPECT_EQ(response->getHeaders().getSingleOrEmpty(HTTP_HEADER_PRIORITY),
+                  "u=1");
+      });
+  expectResponseBody(id);
+  expectResponseEOM(id);
+  parseOutputHQ();
+}
+
+TEST_P(HQDownstreamSessionTest, PriorityLookupFailureOmitsResponseHeader) {
+  const auto id = sendRequestHeader(getGetRequest(), true, true);
+  EXPECT_CALL(*muxTransport_->getSocket(), getStreamPriority(id))
+      .WillOnce(Return(
+          quic::make_unexpected(quic::LocalErrorCode::STREAM_NOT_EXISTS)));
+
+  auto handler =
+      addSimpleStrictHandler([this](folly::EventBase *,
+                                    HTTPSessionContextPtr,
+                                    HTTPSourceHolder requestSource)
+                                 -> folly::coro::Task<HTTPSourceHolder> {
+        co_await expectRequest(requestSource, HTTPMethod::GET, "/");
+        generateGoaway(0, ErrorCode::NO_ERROR);
+        co_return HTTPFixedSource::makeFixedResponse(200, makeBuf(100));
+      });
+
+  transport_->addReadEvent(id, writeBuf_.move(), true);
+  evb_.loop();
+  expectResponseHeaders(
+      id, [](HTTPCodec::StreamID, std::shared_ptr<HTTPMessage> response) {
+        EXPECT_EQ(response->getStatusCode(), 200);
+        EXPECT_FALSE(response->getHeaders().exists(HTTP_HEADER_PRIORITY));
+      });
+  expectResponseBody(id);
+  expectResponseEOM(id);
   parseOutputHQ();
 }
 
@@ -3974,7 +4019,8 @@ TEST_P(HQDownstreamSessionTest, onServerPriorityHeader) {
 
   auto id = sendRequestHeader(req, true, true);
   muxTransport_->socketDriver_.expectSetPriority(
-      id, quic::HTTPPriorityQueue::Priority(1, false));
+      id, quic::HTTPPriorityQueue::Priority(3, false));
+  EXPECT_CALL(*muxTransport_->getSocket(), getStreamPriority(_)).Times(0);
 
   auto handler =
       addSimpleStrictHandler([this](folly::EventBase *evb,
@@ -3984,13 +4030,20 @@ TEST_P(HQDownstreamSessionTest, onServerPriorityHeader) {
         co_await expectRequest(requestSource, HTTPMethod::GET, "/");
         generateGoaway(0, ErrorCode::NO_ERROR);
         auto resp = HTTPFixedSource::makeFixedResponse(200, makeBuf(100));
-        resp->msg_->getHeaders().add("priority", "u=1");
+        resp->msg_->getHeaders().add("priority", "u=3");
         co_return resp;
       });
 
   transport_->addReadEvent(id, writeBuf_.move(), true);
   evb_.loop();
-  expectResponse(id, 200);
+  expectResponseHeaders(
+      id, [](HTTPCodec::StreamID, std::shared_ptr<HTTPMessage> response) {
+        EXPECT_EQ(response->getStatusCode(), 200);
+        EXPECT_EQ(response->getHeaders().getSingleOrEmpty(HTTP_HEADER_PRIORITY),
+                  "u=3");
+      });
+  expectResponseBody(id);
+  expectResponseEOM(id);
   parseOutputHQ();
 }
 

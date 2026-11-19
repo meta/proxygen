@@ -631,6 +631,8 @@ class HTTPCoroSession
   enum class ResponseState { HEADERS, BODY, DONE };
   ResponseState processResponseHeaderEvent(
       StreamState& stream, folly::Try<HTTPHeaderEvent> headerEvent);
+  void maybeAddEgressPriorityHeaders(HTTPHeaders& headers,
+                                     HTTPCodec::StreamID streamId) const;
 
   folly::coro::Task<void> transferRequestBody(StreamState& stream,
                                               HTTPSourceHolder requestSource);

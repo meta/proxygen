@@ -9,6 +9,7 @@
 #include "proxygen/lib/http/coro/HTTPCoroSession.h"
 #include "proxygen/lib/http/coro/HTTPFixedSource.h"
 #include <proxygen/lib/http/HTTPPriorityFunctions.h>
+#include <proxygen/lib/http/codec/CodecProtocol.h>
 #include <proxygen/lib/http/codec/H3EarlyDataHandler.h>
 #include <proxygen/lib/http/codec/HQUtils.h>
 #include <proxygen/lib/http/codec/HTTPChecks.h>
@@ -1906,6 +1907,24 @@ folly::coro::Task<void> HTTPCoroSession::readResponse(
       .startInlineUnsafe();
 }
 
+void HTTPCoroSession::maybeAddEgressPriorityHeaders(
+    HTTPHeaders& headers, HTTPCodec::StreamID streamId) const {
+  if (isDownstream() && isHQCodecProtocol(codec_.getProtocol()) &&
+      !headers.exists(HTTP_HEADER_PRIORITY)) {
+    const auto priority = CHECK_NOTNULL(getQUICTransport())
+                              ->getStreamPriority(streamId)
+                              .value_or(quic::PriorityQueue::Priority{});
+    if (priority.isInitialized()) {
+      const quic::HTTPPriorityQueue::Priority httpPri(priority);
+      headers.add(HTTP_HEADER_PRIORITY,
+                  httpPriorityToString(HTTPPriority(httpPri->urgency,
+                                                    httpPri->incremental,
+                                                    httpPri->order,
+                                                    httpPri->paused)));
+    }
+  }
+}
+
 HTTPCoroSession::ResponseState HTTPCoroSession::processResponseHeaderEvent(
     StreamState& stream, folly::Try<HTTPHeaderEvent> headerEvent) {
   if (stream.isEgressComplete()) {
@@ -1932,7 +1951,7 @@ HTTPCoroSession::ResponseState HTTPCoroSession::processResponseHeaderEvent(
     return ResponseState::DONE;
   }
 
-  const auto& headers = *headerEvent->headers;
+  auto& headers = *headerEvent->headers;
   if (stream.errorStatusCode &&
       headers.getStatusCode() != stream.errorStatusCode) {
     return switchToErrSource(HTTPErrorCode::INTERNAL_ERROR);
@@ -1949,6 +1968,8 @@ HTTPCoroSession::ResponseState HTTPCoroSession::processResponseHeaderEvent(
   if (auto pri = headerEvent->headers->getHTTPPriority()) {
     onPriority(stream.getID(), *pri);
   }
+
+  maybeAddEgressPriorityHeaders(headers.getHeaders(), stream.getID());
 
   HTTPHeaderSize size;
   codec_.generateHeader(
