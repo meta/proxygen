@@ -126,11 +126,11 @@ HTTPCoroSession* HTTPCoroDownstreamSessionFactory::makeQuicSession(
     std::shared_ptr<quic::QuicSocket> quicSocket,
     wangle::TransportInfo tinfo,
     std::shared_ptr<HTTPHandler> handler,
-    bool /*strictValidation*/,
+    bool strictValidation,
     const SettingsList& egressSettingsOverrides) {
   auto codec =
       hq::HQMultiCodec::Factory::getCodec(TransportDirection::DOWNSTREAM,
-                                          codecFactory_->useStrictValidation(),
+                                          strictValidation,
                                           accConfig_->headerIndexingStrategy);
   applySettingsToCodec(*codec);
   for (const auto& setting : egressSettingsOverrides) {
