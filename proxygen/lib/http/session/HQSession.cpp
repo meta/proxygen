@@ -1708,8 +1708,13 @@ void HQSession::onPriority(quic::StreamId streamId, const HTTPPriority& pri) {
     return;
   }
   if (enableEgressPrioritization_) {
-    stream->setPriority(
-        *sock_, streamId, pri, PriorityEventSource::PRIORITY_UPDATE);
+    if (stream->txn_.deferPriorityUpdate(pri)) {
+      stream->txn_.onPriorityChange(
+          pri, PriorityEventSource::PRIORITY_UPDATE, false /* applied */);
+    } else {
+      stream->setPriority(
+          *sock_, streamId, pri, PriorityEventSource::PRIORITY_UPDATE);
+    }
   }
 }
 

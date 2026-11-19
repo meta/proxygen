@@ -66,12 +66,6 @@ auto tryParseContentLength(const std::string& cl, const HTTPTransaction& txn) {
   return tryCl;
 }
 
-// The fields the transport keeps per stream; requiredBps is not one of them.
-bool sameStreamPriority(const HTTPPriority& a, const HTTPPriority& b) {
-  return a.urgency == b.urgency && a.incremental == b.incremental &&
-         a.orderId == b.orderId;
-}
-
 } // namespace
 
 #define INVARIANT_RETURN(X, Y)                                            \
@@ -1754,11 +1748,10 @@ void HTTPTransaction::setEgressRateDemoted(bool demoted) {
   }
 
   auto& demotion = *egressRateDemotion_;
-  // Pick up PRIORITY_UPDATEs, which the session applies to the stream directly.
-  const auto current = getHTTPPriority();
-  if (current &&
-      (demoted || !sameStreamPriority(*current, demotion.demotedPriority))) {
-    demotion.originalPriority = *current;
+  if (demoted) {
+    if (const auto current = getHTTPPriority()) {
+      demotion.originalPriority = *current;
+    }
   }
   demotion.demoted = demoted;
   transport_.changePriority(
@@ -1940,13 +1933,18 @@ std::ostream& operator<<(std::ostream& os, const HTTPTransaction& txn) {
   return os;
 }
 
+bool HTTPTransaction::deferPriorityUpdate(const HTTPPriority& pri) {
+  if (!egressRateDemotion_ || !egressRateDemotion_->demoted) {
+    return false;
+  }
+  egressRateDemotion_->originalPriority = pri;
+  return true;
+}
+
 void HTTPTransaction::updateAndSendPriority(HTTPPriority pri) {
   pri.urgency = HTTPMessage::normalizePriority((int8_t)pri.urgency);
-  if (egressRateDemotion_) {
-    egressRateDemotion_->originalPriority = pri;
-    if (egressRateDemotion_->demoted) {
-      return;
-    }
+  if (deferPriorityUpdate(pri)) {
+    return;
   }
   // Note we no longer want to play with the egressQueue_ with the new API.
   transport_.changePriority(this, pri);

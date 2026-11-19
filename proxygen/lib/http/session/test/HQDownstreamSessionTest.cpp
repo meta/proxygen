@@ -814,13 +814,87 @@ TEST_P(HQDownstreamSessionTest, RateDemotionFollowsClientPriorityUpdates) {
 
   flushRequestsAndLoopN(1);
   hqSession_->onPriority(id, HTTPPriority(2, true));
+  EXPECT_EQ(streamPriority, Priority(7, true));
   flushRequestsAndLoop();
 
-  const std::vector<Priority> expected{Priority(3, false),
-                                       Priority(7, true),
-                                       Priority(2, true),
-                                       Priority(2, true)};
+  const std::vector<Priority> expected{
+      Priority(3, false), Priority(7, true), Priority(2, true)};
   EXPECT_EQ(sentPriorities, expected);
+  handler->txn_->sendEOM();
+  handler->expectDetachTransaction();
+  flushRequestsAndLoop();
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTest,
+       RateDemotionClientUpdatesDoNotBypassExhaustedCredit) {
+  constexpr uint32_t kChunkLength = 1400;
+  auto streamPriority = Priority(1, true);
+  std::vector<Priority> sentPriorities;
+  auto txnObserver = std::make_shared<NiceMock<MockHTTPTransactionObserver>>(
+      MockHTTPTransactionObserver::EventSetBuilder()
+          .enable(HTTPTransactionObserverInterface::Events::TxnPriority)
+          .build());
+  EXPECT_CALL(*txnObserver, onPriorityEvent(_, _)).Times(AnyNumber());
+  EXPECT_CALL(
+      *txnObserver,
+      onPriorityEvent(_,
+                      AllOf(Field(&TxnPriorityEvent::source,
+                                  TxnPriorityEvent::Source::PRIORITY_UPDATE),
+                            Field(&TxnPriorityEvent::applied, true))))
+      .Times(0);
+  for (const auto& deferred : {HTTPPriority(0, true), HTTPPriority(7, true)}) {
+    EXPECT_CALL(
+        *txnObserver,
+        onPriorityEvent(_,
+                        AllOf(Field(&TxnPriorityEvent::source,
+                                    TxnPriorityEvent::Source::PRIORITY_UPDATE),
+                              Field(&TxnPriorityEvent::priority, deferred),
+                              Field(&TxnPriorityEvent::applied, false))));
+  }
+
+  socketDriver_->getSocket()->setConnectionFlowControlWindow(
+      static_cast<uint64_t>(kChunkLength) * 6);
+  const auto id = sendRequest();
+  EXPECT_CALL(*socketDriver_->getSocket(), getStreamPriority(id))
+      .WillRepeatedly([&](StreamId) { return streamPriority; });
+  EXPECT_CALL(*socketDriver_->getSocket(), setStreamPriority(id, _))
+      .WillRepeatedly([&](StreamId, const PriorityQueue::Priority& priority)
+                          -> quic::Expected<void, quic::LocalErrorCode> {
+        streamPriority = Priority(priority);
+        sentPriorities.push_back(streamPriority);
+        return {};
+      });
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&] {
+    handler->txn_->addObserver(txnObserver);
+    handler->txn_->setEgressRateDemotion(8, HTTPPriority(7, true));
+  });
+  handler->expectEOM([&] {
+    handler->sendHeaders(200, kChunkLength * 3);
+    handler->sendBody(kChunkLength);
+  });
+  EXPECT_CALL(*handler, _onEgressPaused()).Times(0);
+  flushRequestsAndLoopN(1);
+  EXPECT_EQ(streamPriority, Priority(7, true));
+
+  hqSession_->onPriority(id, HTTPPriority(0, true));
+  EXPECT_EQ(streamPriority, Priority(7, true));
+  handler->sendBody(kChunkLength);
+  flushRequestsAndLoopN(1);
+  EXPECT_EQ(handler->txn_->getOutstandingEgressBodyBytes(), 0);
+  EXPECT_EQ(streamPriority, Priority(7, true));
+
+  hqSession_->onPriority(id, HTTPPriority(7, true));
+  handler->sendBody(kChunkLength);
+  flushRequestsAndLoopN(1);
+  EXPECT_EQ(handler->txn_->getOutstandingEgressBodyBytes(), 0);
+  EXPECT_EQ(streamPriority, Priority(7, true));
+  handler->txn_->setEgressRateDemotion(0, HTTPPriority(7, true));
+
+  const std::vector<Priority> expected{Priority(7, true), Priority(7, true)};
+  EXPECT_EQ(sentPriorities, expected);
+
   handler->txn_->sendEOM();
   handler->expectDetachTransaction();
   flushRequestsAndLoop();

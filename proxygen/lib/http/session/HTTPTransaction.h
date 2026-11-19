@@ -959,7 +959,7 @@ class HTTPTransaction
   /**
    * Invoked by the session when it applies a new priority to this
    * transaction (`applied`), or when the peer requests one the session does
-   * not apply; notifies `TxnPriority` observers.
+   * not apply or defers; notifies `TxnPriority` observers.
    */
   void onPriorityChange(
       const HTTPPriority& priority,
@@ -1494,6 +1494,13 @@ class HTTPTransaction
    * Change the priority of this transaction, may generate a PRIORITY frame.
    */
   virtual void updateAndSendPriority(HTTPPriority pri);
+
+  /**
+   * While the transaction is rate demoted, records `pri` as the priority to
+   * restore when demotion ends and returns true; the caller must not apply
+   * `pri` to the transport until then. Otherwise returns false.
+   */
+  bool deferPriorityUpdate(const HTTPPriority& pri);
 
   /**
    * Add a callback waiting for this transaction to have a transport with

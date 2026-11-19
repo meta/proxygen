@@ -155,7 +155,9 @@ class HTTPTransactionObserverInterface {
     Source source;
     // Whether the session applied `priority` to egress scheduling. False
     // means the peer requested this priority and the session did not apply
-    // it: `HTTPSession` (HTTP/1.x and HTTP/2) does not schedule by priority.
+    // it: `HTTPSession` (HTTP/1.x and HTTP/2) does not schedule by priority,
+    // and `HQSession` defers it while the transaction is rate demoted. A
+    // deferred priority is applied when demotion ends, reported as `LOCAL`.
     bool applied;
   };
 
