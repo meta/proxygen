@@ -19,7 +19,7 @@ class WindowContainer {
   }
 
   bool reserve(size_t length, uint16_t padding, bool strict = true) {
-    if (length + padding > std::numeric_limits<uint32_t>::max() ||
+    if (uint64_t{length} + padding > std::numeric_limits<uint32_t>::max() ||
         !recvWindow_.reserve(uint32_t(length) + padding, strict)) {
       return false;
     }

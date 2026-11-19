@@ -31,6 +31,10 @@ namespace proxygen::hq {
 
 using namespace folly::io;
 
+// HTTPPriority::urgency is a 3-bit field, so it never exceeds kMaxPriority (7)
+// and always fits within the QUIC priority range.
+static_assert(kMaxPriority <= quic::kDefaultMaxPriority);
+
 ParseResult HQControlCodec::checkFrameAllowed(FrameType type) {
   switch (type) {
     case hq::FrameType::DATA:
@@ -255,11 +259,6 @@ size_t HQControlCodec::generateSettings(folly::IOBufQueue& writeBuf) {
 size_t HQControlCodec::generatePriority(folly::IOBufQueue& writeBuf,
                                         StreamID stream,
                                         HTTPPriority priority) {
-  if (priority.urgency > quic::kDefaultMaxPriority) {
-    LOG(ERROR) << "Attempt to generate invalid priority update with urgency="
-               << (uint64_t)priority.urgency;
-    return 0;
-  }
   auto updateString = folly::to<std::string>(
       "u=", priority.urgency, (priority.incremental ? ",i" : ""));
   auto writeRet = hq::writePriorityUpdate(writeBuf, stream, updateString);
@@ -274,12 +273,6 @@ size_t HQControlCodec::generatePriority(folly::IOBufQueue& writeBuf,
 size_t HQControlCodec::generatePushPriority(folly::IOBufQueue& writeBuf,
                                             StreamID pushId,
                                             HTTPPriority priority) {
-  if (priority.urgency > quic::kDefaultMaxPriority) {
-    LOG(ERROR)
-        << "Attempt to generate invalid push priority update with urgency="
-        << (uint64_t)priority.urgency;
-    return 0;
-  }
   auto updateString = folly::to<std::string>(
       "u=", priority.urgency, (priority.incremental ? ",i" : ""));
   auto writeRet = hq::writePushPriorityUpdate(writeBuf, pushId, updateString);
