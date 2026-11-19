@@ -201,7 +201,7 @@ struct CoroSessionHandle {
 };
 
 /**
- * Class for managing an HTTP/1.x or HTTP/2 connection.
+ * Class for managing an HTTP/1.x, HTTP/2, or HTTP/3 connection.
  *
  * At its core, it runs two coroutines, a read loop and a write loop.
  *

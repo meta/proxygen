@@ -1540,40 +1540,45 @@ bool HTTPUniplexTransportSession::getCurrentTransportInfoImpl(
 
 bool HTTPQuicCoroSession::getCurrentTransportInfoImpl(
     wangle::TransportInfo* tinfo) const {
-  if (quicSocket_->good()) {
-    auto connState = quicSocket_->getState();
-    auto quicTransportInfo = quicSocket_->getTransportInfo();
+  auto connState = quicSocket_->getState();
+  auto quicTransportInfo = quicSocket_->getTransportInfo();
 
-    tinfo->rtt = quicTransportInfo.srtt;
-    tinfo->rtt_var = quicTransportInfo.rttvar.count();
-    tinfo->rtx = quicTransportInfo.packetsRetransmitted;
-    tinfo->rtx_tm = quicTransportInfo.totalPacketsMarkedLostByTimeout;
-    tinfo->rto = quicTransportInfo.pto.count();
-    tinfo->cwndBytes = int64_t(quicTransportInfo.congestionWindow);
-    tinfo->mss = int64_t(quicTransportInfo.mss);
-    tinfo->cwnd = tinfo->cwndBytes / tinfo->mss;
-    tinfo->totalBytes = int64_t(quicTransportInfo.bytesSent);
-    updateQuicProtocolInfo(*currentQuicProtocolInfo_, *quicSocket_);
-    tinfo->protocolInfo = currentQuicProtocolInfo_;
-    tinfo->validTcpinfo = true;
+  tinfo->acceptTime = setupTransportInfo_.acceptTime;
+  tinfo->secure = true;
+  tinfo->securityType = "QUIC";
+  tinfo->appProtocol = setupTransportInfo_.appProtocol;
+  tinfo->sslVersion = setupTransportInfo_.sslVersion;
+  tinfo->keyExchange = setupTransportInfo_.keyExchange;
+  tinfo->rtt = quicTransportInfo.srtt;
+  tinfo->rtt_var = quicTransportInfo.rttvar.count();
+  tinfo->rtx = quicTransportInfo.packetsRetransmitted;
+  tinfo->rtx_tm = quicTransportInfo.totalPacketsMarkedLostByTimeout;
+  tinfo->rto = quicTransportInfo.pto.count();
+  tinfo->cwndBytes = int64_t(quicTransportInfo.congestionWindow);
+  tinfo->mss = int64_t(quicTransportInfo.mss);
+  tinfo->cwnd = tinfo->cwndBytes / tinfo->mss;
+  tinfo->totalBytes = int64_t(quicTransportInfo.bytesSent);
+  tinfo->totalPackets = int64_t(quicTransportInfo.totalPacketsSent);
+  tinfo->totalPacketsLost = int64_t(quicTransportInfo.totalPacketsMarkedLost);
+  updateQuicProtocolInfo(*currentQuicProtocolInfo_, *quicSocket_);
+  tinfo->protocolInfo = currentQuicProtocolInfo_;
+  tinfo->validTcpinfo = true;
 
-    if (connState) {
-      tinfo->recvwnd = int64_t(connState->flowControlState.windowSize);
+  if (connState) {
+    tinfo->recvwnd = int64_t(connState->flowControlState.windowSize);
 
-      if (connState->congestionController) {
-        tinfo->caAlgo = quic::congestionControlTypeToString(
-            connState->congestionController->type());
-        if (connState->congestionController->type() ==
-            quic::CongestionControlType::Cubic) {
-          quic::CongestionControllerStats ccStats;
-          connState->congestionController->getStats(ccStats);
-          tinfo->ssthresh = int64_t(ccStats.cubicStats.ssthresh) / tinfo->mss;
-        }
+    if (connState->congestionController) {
+      tinfo->caAlgo = quic::congestionControlTypeToString(
+          connState->congestionController->type());
+      if (connState->congestionController->type() ==
+          quic::CongestionControlType::Cubic) {
+        quic::CongestionControllerStats ccStats{};
+        connState->congestionController->getStats(ccStats);
+        tinfo->ssthresh = int64_t(ccStats.cubicStats.ssthresh) / tinfo->mss;
       }
     }
-    return true;
   }
-  return false;
+  return true;
 }
 
 void HTTPUniplexTransportSession::onWindowUpdate(HTTPCodec::StreamID streamID,
