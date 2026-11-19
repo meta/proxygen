@@ -30,6 +30,7 @@ std::shared_ptr<const AcceptorConfiguration> HTTPServerAcceptor::makeConfig(
   conf->receiveSessionWindowSize = opts.receiveSessionWindowSize;
   conf->acceptBacklog = opts.listenBacklog;
   conf->maxConcurrentIncomingStreams = opts.maxConcurrentIncomingStreams;
+  conf->egressSettings = opts.egressSettings;
 
   if (ipConfig.protocol == HTTPServer::Protocol::HTTP2) {
     conf->plaintextProtocol = http2::kProtocolCleartextString;

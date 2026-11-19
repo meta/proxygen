@@ -15,6 +15,7 @@
 #include <functional>
 #include <proxygen/httpserver/Filters.h>
 #include <proxygen/httpserver/RequestHandlerFactory.h>
+#include <proxygen/lib/http/codec/HTTPSettings.h>
 
 namespace proxygen {
 
@@ -107,6 +108,12 @@ class HTTPServerOptions {
    * per connection on protocols that allow multiplexing.
    */
   uint32_t maxConcurrentIncomingStreams{100};
+
+  /**
+   * HTTP/2 settings to send to the peer, e.g. WT_ENABLED to accept
+   * WebTransport sessions.
+   */
+  SettingsList egressSettings;
 
   /**
    * Set to true to enable content compression. Currently false for
