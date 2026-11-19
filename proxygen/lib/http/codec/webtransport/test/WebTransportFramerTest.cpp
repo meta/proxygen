@@ -378,6 +378,25 @@ TEST(WebTransportFramerTest, CloseWebTransportSession) {
             capsule.applicationErrorMessage);
 }
 
+TEST(WebTransportFramerTest, SessionCapsuleWireFormat) {
+  folly::IOBufQueue queue{folly::IOBufQueue::cacheChainLength()};
+  ASSERT_TRUE(writeCloseWebTransportSession(
+      queue,
+      CloseWebTransportSessionCapsule{.applicationErrorCode = 0x12345678,
+                                      .applicationErrorMessage = "BAD!"}));
+  // type 0x2843, length 8, 32-bit error code, message
+  constexpr std::string_view kClose{
+      "\x68\x43\x08\x12\x34\x56\x78"
+      "BAD!",
+      11};
+  EXPECT_EQ(queue.move()->to<std::string>(), kClose);
+
+  ASSERT_TRUE(writeDrainWebTransportSession(queue));
+  // type 0x78ae, length 0
+  constexpr std::string_view kDrain{"\x80\x00\x78\xae\x00", 5};
+  EXPECT_EQ(queue.move()->to<std::string>(), kDrain);
+}
+
 TEST(WebTransportFramerTest, DrainWebTransportSession) {
   folly::IOBufQueue queue{folly::IOBufQueue::cacheChainLength()};
   auto writeRes = writeDrainWebTransportSession(queue);

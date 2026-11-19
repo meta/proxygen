@@ -69,6 +69,8 @@ class WebTransportCapsuleCodec : public CapsuleCodec {
       case folly::to_underlying(CapsuleType::WT_STREAMS_BLOCKED_UNI):
       case folly::to_underlying(CapsuleType::CLOSE_WEBTRANSPORT_SESSION):
       case folly::to_underlying(CapsuleType::DRAIN_WEBTRANSPORT_SESSION):
+      case folly::to_underlying(CapsuleType::LEGACY_CLOSE_WEBTRANSPORT_SESSION):
+      case folly::to_underlying(CapsuleType::LEGACY_DRAIN_WEBTRANSPORT_SESSION):
       // RFC9297 defines the DATAGRAM capsule for any HTTP version; over http/3
       // a datagram may arrive either as a quic datagram or as this capsule
       case folly::to_underlying(CapsuleType::DATAGRAM):

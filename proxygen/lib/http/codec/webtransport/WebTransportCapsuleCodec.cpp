@@ -78,7 +78,13 @@ WebTransportCapsuleCodec::parseCapsule(folly::io::Cursor& cursor) {
           parseCloseWebTransportSession(cursor, curCapsuleLength_),
           callback_,
           &Callback::onCloseSession);
+    case folly::to_underlying(CapsuleType::LEGACY_CLOSE_WEBTRANSPORT_SESSION):
+      return dispatchParsedFrame(
+          parseLegacyCloseWebTransportSession(cursor, curCapsuleLength_),
+          callback_,
+          &Callback::onCloseSession);
     case folly::to_underlying(CapsuleType::DRAIN_WEBTRANSPORT_SESSION):
+    case folly::to_underlying(CapsuleType::LEGACY_DRAIN_WEBTRANSPORT_SESSION):
       return dispatchParsedFrame(
           parseDrainWebTransportSession(curCapsuleLength_),
           callback_,

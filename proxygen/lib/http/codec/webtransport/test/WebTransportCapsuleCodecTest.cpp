@@ -534,20 +534,53 @@ TEST_F(WebTransportCapsuleCodecTest, H3OnCloseWebTransportSessionCapsule) {
   h3_codec_->onIngress(std::move(buf), true);
 }
 
+// WT_CLOSE_SESSION (0x2843) with a 3-byte length, too short for the 32-bit
+// application error code
+constexpr std::string_view kShortCloseSession{"\x68\x43\x03\x00\x01\xf4", 6};
+
 TEST_F(WebTransportCapsuleCodecTest, H2OnCloseWebTransportSessionCapsuleError) {
-  CloseWebTransportSessionCapsule capsule{.applicationErrorCode = 500,
-                                          .applicationErrorMessage = "BAD!"};
-  writeCloseWebTransportSession(queue_, capsule);
-  testParseUnderflow(CapsuleCodec::ErrorCode::PARSE_UNDERFLOW,
-                     CodecVersion::H2);
+  EXPECT_CALL(callback_, onCloseSession(_)).Times(0);
+  EXPECT_CALL(callback_,
+              onConnectionError(CapsuleCodec::ErrorCode::PARSE_UNDERFLOW));
+  h2_codec_->onIngress(folly::IOBuf::copyBuffer(kShortCloseSession.data(),
+                                                kShortCloseSession.size()),
+                       true);
 }
 
 TEST_F(WebTransportCapsuleCodecTest, H3OnCloseWebTransportSessionCapsuleError) {
-  CloseWebTransportSessionCapsule capsule{.applicationErrorCode = 500,
-                                          .applicationErrorMessage = "BAD!"};
-  writeCloseWebTransportSession(queue_, capsule);
-  testParseUnderflow(CapsuleCodec::ErrorCode::PARSE_UNDERFLOW,
-                     CodecVersion::H3);
+  EXPECT_CALL(callback_, onCloseSession(_)).Times(0);
+  EXPECT_CALL(callback_,
+              onConnectionError(CapsuleCodec::ErrorCode::PARSE_UNDERFLOW));
+  h3_codec_->onIngress(folly::IOBuf::copyBuffer(kShortCloseSession.data(),
+                                                kShortCloseSession.size()),
+                       true);
+}
+
+TEST_F(WebTransportCapsuleCodecTest, LegacySessionCapsules) {
+  // type 0x190B4D45, length 6, varint error code 500, message
+  constexpr std::string_view kLegacyClose{
+      "\x99\x0b\x4d\x45\x06\x41\xf4"
+      "BAD!",
+      11};
+  // type 0x190B4D46, length 0
+  constexpr std::string_view kLegacyDrain{"\x99\x0b\x4d\x46\x00", 5};
+  for (auto version : {CodecVersion::H2, CodecVersion::H3}) {
+    EXPECT_CALL(callback_, onCloseSession(_))
+        .WillOnce([](const CloseWebTransportSessionCapsule& capsule) {
+          EXPECT_EQ(capsule.applicationErrorCode, 500);
+          EXPECT_EQ(capsule.applicationErrorMessage, "BAD!");
+        });
+    EXPECT_CALL(callback_, onDrainSession(_));
+    EXPECT_CALL(callback_, onConnectionError(_)).Times(0);
+    auto& codec = (version == CodecVersion::H2) ? h2_codec_ : h3_codec_;
+    codec->onIngress(
+        folly::IOBuf::copyBuffer(kLegacyClose.data(), kLegacyClose.size()),
+        false);
+    codec->onIngress(
+        folly::IOBuf::copyBuffer(kLegacyDrain.data(), kLegacyDrain.size()),
+        true);
+    Mock::VerifyAndClearExpectations(&callback_);
+  }
 }
 
 TEST_F(WebTransportCapsuleCodecTest, H2OnDrainWebTransportSessionCapsule) {

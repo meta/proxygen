@@ -240,6 +240,21 @@ folly::Expected<DatagramCapsule, CapsuleCodec::ErrorCode> parseDatagram(
 folly::Expected<CloseWebTransportSessionCapsule, CapsuleCodec::ErrorCode>
 parseCloseWebTransportSession(folly::io::Cursor& cursor, size_t length) {
   CloseWebTransportSessionCapsule closeWebTransportSessionCapsule{};
+  if (length < sizeof(uint32_t) || !cursor.canAdvance(length)) {
+    return folly::makeUnexpected(CapsuleCodec::ErrorCode::PARSE_UNDERFLOW);
+  }
+  closeWebTransportSessionCapsule.applicationErrorCode =
+      cursor.readBE<uint32_t>();
+  length -= sizeof(uint32_t);
+  closeWebTransportSessionCapsule.applicationErrorMessage.resize(length);
+  cursor.pull(closeWebTransportSessionCapsule.applicationErrorMessage.data(),
+              length);
+  return closeWebTransportSessionCapsule;
+}
+
+folly::Expected<CloseWebTransportSessionCapsule, CapsuleCodec::ErrorCode>
+parseLegacyCloseWebTransportSession(folly::io::Cursor& cursor, size_t length) {
+  CloseWebTransportSessionCapsule closeWebTransportSessionCapsule{};
   auto errorCodeOpt = quic::follyutils::decodeQuicInteger(cursor, length);
   if (!errorCodeOpt) {
     return folly::makeUnexpected(CapsuleCodec::ErrorCode::PARSE_UNDERFLOW);
@@ -541,17 +556,14 @@ WriteResult writeCloseWebTransportSession(
     folly::IOBufQueue& queue, const CloseWebTransportSessionCapsule& capsule) {
   size_t size = 0;
   bool error = false;
-  auto capsuleLen = getCapsuleSize<1, 1>(
-      {capsule.applicationErrorCode}, {capsule.applicationErrorMessage.size()});
-  if (capsuleLen.hasError()) {
-    return std::nullopt;
-  }
   writeCapsuleHeader(queue,
                      CapsuleType::CLOSE_WEBTRANSPORT_SESSION,
                      size,
                      error,
-                     capsuleLen.value());
-  writeVarint(queue, capsule.applicationErrorCode, size, error);
+                     sizeof(uint32_t) + capsule.applicationErrorMessage.size());
+  folly::io::QueueAppender appender(&queue, sizeof(uint32_t));
+  appender.writeBE<uint32_t>(capsule.applicationErrorCode);
+  size += sizeof(uint32_t);
   queue.append(
       folly::IOBuf::copyBuffer(capsule.applicationErrorMessage.data(),
                                capsule.applicationErrorMessage.size()));

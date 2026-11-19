@@ -36,8 +36,12 @@ enum class CapsuleType : uint32_t {
   WT_STREAMS_BLOCKED_BIDI = 0x190B4D43,
   WT_STREAMS_BLOCKED_UNI = 0x190B4D44,
   DATAGRAM = 0x00,
-  CLOSE_WEBTRANSPORT_SESSION = 0x190B4D45,
-  DRAIN_WEBTRANSPORT_SESSION = 0x190B4D46
+  CLOSE_WEBTRANSPORT_SESSION = 0x2843,
+  DRAIN_WEBTRANSPORT_SESSION = 0x78ae,
+  // Pre-standard codepoints from older proxygen builds, parsed on ingress but
+  // never written. The legacy close carries a varint error code.
+  LEGACY_CLOSE_WEBTRANSPORT_SESSION = 0x190B4D45,
+  LEGACY_DRAIN_WEBTRANSPORT_SESSION = 0x190B4D46
 };
 
 // QMUX frame types from draft-ietf-quic-qmux, matching QUIC frame type values.
@@ -163,6 +167,9 @@ folly::Expected<DatagramCapsule, CapsuleCodec::ErrorCode> parseDatagram(
 
 folly::Expected<CloseWebTransportSessionCapsule, CapsuleCodec::ErrorCode>
 parseCloseWebTransportSession(folly::io::Cursor& cursor, size_t length);
+
+folly::Expected<CloseWebTransportSessionCapsule, CapsuleCodec::ErrorCode>
+parseLegacyCloseWebTransportSession(folly::io::Cursor& cursor, size_t length);
 
 folly::Expected<DrainWebTransportSessionCapsule, CapsuleCodec::ErrorCode>
 parseDrainWebTransportSession(size_t length);
