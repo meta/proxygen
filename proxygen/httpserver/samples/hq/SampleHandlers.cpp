@@ -7,7 +7,6 @@
  */
 
 #include <proxygen/httpserver/samples/hq/SampleHandlers.h>
-#include <proxygen/lib/http/webtransport/HTTPWebTransport.h>
 
 #include <folly/String.h>
 #include <proxygen/lib/utils/Logging.h>
@@ -149,182 +148,17 @@ void WaitReleaseHandler::maybeCleanup() {
 }
 void DeviousBatonHandler::onHeadersComplete(
     std::unique_ptr<proxygen::HTTPMessage> msg) noexcept {
-  VLOG(10) << "WebtransHandler::" << __func__;
   msg->dumpMessage(2);
-
-  if (msg->getMethod() != proxygen::HTTPMethod::CONNECT) {
-    LOG(ERROR) << "Method not supported";
-    proxygen::HTTPMessage resp;
-    resp.setVersionString(getHttpVersion());
-    resp.setStatusCode(400);
-    resp.setStatusMessage("ERROR");
-    resp.setWantsKeepalive(false);
-    txn_->sendHeaders(resp);
-    txn_->sendEOM();
-    txn_ = nullptr;
-    return;
-  }
-
-  VLOG(2) << "Received CONNECT request for " << msg->getPathAsStringPiece()
-          << " at: "
-          << std::chrono::duration_cast<std::chrono::microseconds>(
-                 std::chrono::steady_clock::now().time_since_epoch())
-                 .count();
-
-  auto status = 500;
-  auto wt = txn_->getWebTransport();
-  if (wt) {
-    devious_.emplace(wt,
-                     devious::DeviousBaton::Mode::SERVER,
-                     [this](WebTransport::StreamReadHandle* readHandle) {
-                       readHandle->awaitNextRead(
-                           evb_,
-                           [this](auto readHandle, auto id, auto streamData) {
-                             readHandler(readHandle, id, std::move(streamData));
-                           });
-                     });
-    auto respCode = devious_->onRequest(*msg);
-    if (!respCode) {
-      status = respCode.error();
-    } else {
-      status = 200;
-    }
-  }
-
-  // Check for query param immediate=1 and store result in bool
-  bool immediate = (msg->getQueryParam("immediate") == "1");
-
-  // Send the response to the original get request
-  proxygen::HTTPMessage resp;
+  auto wtHandler = std::make_unique<devious::DeviousBatonWtHandler>(evb_);
+  auto resp = wtHandler->onRequest(*msg);
   resp.setVersionString(getHttpVersion());
-  resp.setStatusCode(status);
-  resp.setIsChunked(true);
-  if (status / 100 == 2) {
-    resp.getHeaders().add("sec-webtransport-http3-draft", "draft02");
-    resp.setWantsKeepalive(true);
-  } else {
-    resp.setWantsKeepalive(false);
-    devious_.reset();
-  }
-  std::vector<std::string> supportedProtocols{"deviousbaton-01"};
-  if (auto wtAvailableProtocols =
-          HTTPWebTransport::getWTAvailableProtocols(*msg)) {
-    if (auto wtProtocol = HTTPWebTransport::negotiateWTProtocol(
-            wtAvailableProtocols.value(), supportedProtocols)) {
-      // TODO: Set the version from the negotiated protocol instead of query
-      // param
-      HTTPWebTransport::setWTProtocol(resp, wtProtocol.value());
-    } else {
-      VLOG(4) << "Failed to negotiate WebTransport protocol";
-      resp.setStatusCode(400);
-    }
-  }
   resp.dumpMessage(4);
-  txn_->sendHeaders(resp);
-
-  if (devious_) {
-    if (immediate) {
-      devious_->start();
-    } else {
-      folly::EventBaseManager::get()->getEventBase()->runInLoop(
-          [this] { devious_->start(); });
-    }
-  } else {
-    txn_->sendEOM();
-    txn_ = nullptr;
-  }
-}
-
-void DeviousBatonHandler::readHandler(
-    WebTransport::StreamReadHandle* readHandle,
-    uint64_t id,
-    folly::Try<WebTransport::StreamData> streamData) {
-  if (streamData.hasException()) {
-    VLOG(4) << "read error=" << streamData.exception().what();
+  if (resp.is2xxResponse()) {
+    // Detaches and deletes this handler
+    txn_->sendWtHeaders(resp, std::move(wtHandler));
     return;
   }
-
-  VLOG(4) << "read data id=" << id;
-
-  devious_->onStreamData(
-      id, streams_[id], std::move(streamData->data), streamData->fin);
-  if (!readHandle) {
-    // terminal event (fin or exception), handle is no longer valid
-    return;
-  }
-  if (!readHandle->getCancelToken().isCancellationRequested()) {
-    readHandle->awaitNextRead(
-        evb_, [this](auto readHandle, auto id, auto streamData) {
-          readHandler(readHandle, id, std::move(streamData));
-        });
-  }
-}
-
-void DeviousBatonHandler::onWebTransportBidiStream(
-    HTTPCodec::StreamID id, WebTransport::BidiStreamHandle stream) noexcept {
-  VLOG(4) << "New Bidi Stream=" << id;
-  stream.readHandle->awaitNextRead(
-      evb_, [this](auto readHandle, auto id, auto streamData) {
-        readHandler(readHandle, id, std::move(streamData));
-      });
-}
-
-void DeviousBatonHandler::onWebTransportUniStream(
-    HTTPCodec::StreamID id,
-    WebTransport::StreamReadHandle* readHandle) noexcept {
-  VLOG(4) << "New Uni Stream=" << id;
-  readHandle->awaitNextRead(
-      evb_, [this](auto readHandle, auto id, auto streamData) {
-        readHandler(readHandle, id, std::move(streamData));
-      });
-}
-
-void DeviousBatonHandler::onWebTransportSessionClose(
-    folly::Optional<uint32_t> error) noexcept {
-  VLOG(4) << "Session Close error="
-          << (error ? folly::to<std::string>(*error) : std::string("none"));
-  devious_.reset();
-}
-
-void DeviousBatonHandler::onDatagram(
-    std::unique_ptr<folly::IOBuf> datagram) noexcept {
-  VLOG(4) << "DeviousBatonHandler::" << __func__;
-}
-
-void DeviousBatonHandler::onBody(std::unique_ptr<folly::IOBuf> body) noexcept {
-  VLOG(4) << "DeviousBatonHandler::" << __func__;
-  VLOG(3) << IOBufPrinter::printHexFolly(body.get(), true);
-  folly::io::Cursor cursor(body.get());
-  auto leftToParse = body->computeChainDataLength();
-  while (leftToParse > 0) {
-    auto typeRes = quic::follyutils::decodeQuicInteger(cursor, leftToParse);
-    if (!typeRes) {
-      LOG(ERROR) << "Failed to decode capsule type.";
-      return;
-    }
-    auto [type, typeLen] = typeRes.value();
-    leftToParse -= typeLen;
-    auto capLengthRes =
-        quic::follyutils::decodeQuicInteger(cursor, leftToParse);
-    if (!capLengthRes) {
-      LOG(ERROR) << "Failed to decode capsule length: type=" << type;
-      return;
-    }
-    auto [capLength, capLengthLen] = capLengthRes.value();
-    leftToParse -= capLengthLen;
-    if (capLength > leftToParse) {
-      LOG(ERROR) << "Not enough data for capsule: type=" << type
-                 << " length=" << capLength;
-      return;
-    }
-  }
-}
-
-void DeviousBatonHandler::onEOM() noexcept {
-  VLOG(4) << "DeviousBatonHandler::" << __func__;
-  if (txn_ && !txn_->isEgressEOMSeen()) {
-    txn_->sendEOM();
-  }
+  txn_->sendHeadersWithEOM(resp);
 }
 
 void DeviousBatonHandler::onError(

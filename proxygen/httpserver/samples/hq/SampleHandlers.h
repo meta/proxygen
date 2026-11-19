@@ -32,7 +32,7 @@
 #include <folly/io/async/AsyncTimeout.h>
 #include <folly/io/async/EventBaseManager.h>
 #include <proxygen/httpserver/samples/hq/HQServer.h>
-#include <proxygen/httpserver/samples/hq/devious/DeviousBaton.h>
+#include <proxygen/httpserver/samples/hq/devious/DeviousBatonWtHandler.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>
 #include <proxygen/lib/utils/SafePathUtils.h>
 
@@ -778,35 +778,18 @@ class DeviousBatonHandler : public BaseSampleHandler {
   }
 
   void onHeadersComplete(
-      std::unique_ptr<proxygen::HTTPMessage> /* msg */) noexcept override;
+      std::unique_ptr<proxygen::HTTPMessage> msg) noexcept override;
 
-  void onWebTransportBidiStream(
-      proxygen::HTTPCodec::StreamID id,
-      proxygen::WebTransport::BidiStreamHandle stream) noexcept override;
-  void onWebTransportUniStream(
-      proxygen::HTTPCodec::StreamID id,
-      proxygen::WebTransport::StreamReadHandle* readHandle) noexcept override;
-
-  void onWebTransportSessionClose(
-      folly::Optional<uint32_t> error) noexcept override;
-
-  void onDatagram(std::unique_ptr<folly::IOBuf> datagram) noexcept override;
-
-  void onBody(std::unique_ptr<folly::IOBuf> /* chain */) noexcept override;
-
-  void onEOM() noexcept override;
-
-  void onError(const proxygen::HTTPException& /*error*/) noexcept override;
-
-  void detachTransaction() noexcept override {
+  void onBody(std::unique_ptr<folly::IOBuf> /* chain */) noexcept override {
   }
 
-  folly::Optional<devious::DeviousBaton> devious_;
-  void readHandler(proxygen::WebTransport::StreamReadHandle* readHandle,
-                   uint64_t id,
-                   folly::Try<proxygen::WebTransport::StreamData> streamData);
+  void onEOM() noexcept override {
+  }
+
+  void onError(const proxygen::HTTPException& error) noexcept override;
+
+ private:
   folly::EventBase* evb_{nullptr};
-  std::map<uint64_t, devious::DeviousBaton::BatonMessageState> streams_;
 };
 
 class StaticFileHandler : public BaseSampleHandler {

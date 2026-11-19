@@ -52,6 +52,11 @@ std::unique_ptr<proxygen::HTTPServerOptions> H2Server::createServerOptions(
           .advertisedInitialBidiLocalStreamFlowControlWindow;
   serverOptions->receiveSessionWindowSize =
       params.transportSettings.advertisedInitialConnectionFlowControlWindow;
+  serverOptions->supportsConnect = true;
+  serverOptions->egressSettings = {
+      {proxygen::SettingsId::ENABLE_CONNECT_PROTOCOL, 1},
+      {proxygen::SettingsId::WT_ENABLED, 1},
+  };
   serverOptions->handlerFactories =
       proxygen::RequestHandlerChain()
           .addThen<SampleHandlerFactory>(

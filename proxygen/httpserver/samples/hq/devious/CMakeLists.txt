@@ -7,11 +7,16 @@
 proxygen_add_library(proxygen_hq_devious_baton
   SRCS
     DeviousBaton.cpp
+    DeviousBatonWtHandler.cpp
   DEPS
+    proxygen_http_webtransport_httpwebtransport
     mvfst::mvfst_codec_types
     mvfst::mvfst_folly_utils
+    Folly::folly_container_f14_hash
+    Folly::folly_futures_core
   EXPORTED_DEPS
     proxygen_http_message
     proxygen_webtransport
     Folly::folly_io_iobuf
+    Folly::folly_io_async_async_base
 )

@@ -38,6 +38,10 @@ class DeviousBaton {
       : wt_(inWt), mode_(mode), startReadFn_(startReadFn) {
   }
 
+  void setWebTransport(proxygen::WebTransport* wt) {
+    wt_ = wt;
+  }
+
   folly::Expected<folly::Unit, uint16_t> onRequest(
       const proxygen::HTTPMessage& request);
 
@@ -50,8 +54,8 @@ class DeviousBaton {
   struct BatonMessageState {
     enum State { PAD_LEN, PAD, BATON, DONE } state{PAD_LEN};
     folly::IOBufQueue bufQueue;
-    uint64_t paddingRemaining;
-    uint8_t baton;
+    uint64_t paddingRemaining{0};
+    uint8_t baton{0};
   };
 
   void onStreamData(uint64_t streamId,
