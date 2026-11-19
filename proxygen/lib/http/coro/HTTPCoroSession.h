@@ -235,8 +235,6 @@ struct CoroSessionHandle {
  *  * Error handling
  *  * Custom timeouts
  *
- * Does not (yet) support
- *  * Priority
  */
 class HTTPCoroSession
     : public HTTPCodec::Callback

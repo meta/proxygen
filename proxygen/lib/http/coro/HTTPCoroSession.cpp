@@ -43,6 +43,13 @@ const quic::QuicError kHTTPNoError{
 
 const HTTPPriority kDefaultPriority{3, false};
 
+quic::HTTPPriorityQueue::Priority toQuicPriority(const HTTPPriority& pri) {
+  return pri.paused ? quic::HTTPPriorityQueue::Priority(
+                          quic::HTTPPriorityQueue::Priority::PAUSED)
+                    : quic::HTTPPriorityQueue::Priority(
+                          pri.urgency, pri.incremental, pri.orderId);
+}
+
 //  ErrorCodes that can be generated from within HTTPStreamSource
 HTTPErrorCode sourceCompleteErr2ErrorCode(HTTPErrorCode ec) {
   switch (ec) {
@@ -696,8 +703,7 @@ void HTTPQuicCoroSession::onPriority(quic::StreamId streamId,
     return;
   }
 
-  quicSocket_->setStreamPriority(
-      streamId, HTTPPriorityQueue::Priority(pri.urgency, pri.incremental));
+  quicSocket_->setStreamPriority(streamId, toQuicPriority(pri));
 }
 
 /**
@@ -714,8 +720,7 @@ size_t HTTPQuicCoroSession::sendPriority(quic::StreamId id, HTTPPriority pri) {
     return 0;
   }
 
-  quicSocket_->setStreamPriority(
-      id, HTTPPriorityQueue::Priority(pri.urgency, pri.incremental));
+  quicSocket_->setStreamPriority(id, toQuicPriority(pri));
 
   auto ret = codec_.generatePriority(writeBuf_, id, pri);
   writeEvent_.signal();
@@ -1032,10 +1037,7 @@ void HTTPQuicCoroSession::onHeadersComplete(HTTPCodec::StreamID streamID,
   if (isDownstream()) {
     auto itr = priorityUpdatesBuffer_.find(streamID);
     if (itr != priorityUpdatesBuffer_.end()) {
-      quicSocket_->setStreamPriority(
-          streamID,
-          HTTPPriorityQueue::Priority(itr->second.urgency,
-                                      itr->second.incremental));
+      quicSocket_->setStreamPriority(streamID, toQuicPriority(itr->second));
       priorityUpdatesBuffer_.erase(itr);
     } else if (priority) {
       onPriority(streamID, *priority);
