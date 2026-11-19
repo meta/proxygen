@@ -586,8 +586,8 @@ class HTTPCoroSession
   uint64_t sessionID_{folly::Random::rand64()};
   folly::Executor::KeepAlive<folly::EventBase> eventBase_;
   TransportDirection direction_;
-  folly::SocketAddress localAddr_;
-  folly::SocketAddress peerAddr_;
+  mutable folly::SocketAddress localAddr_;
+  mutable folly::SocketAddress peerAddr_;
   std::string userSessionId_;
   HTTPCodecFilterChain codec_;
   std::shared_ptr<HTTPHandler> handler_;
@@ -1046,6 +1046,9 @@ class HTTPQuicCoroSession final
                       std::shared_ptr<HTTPHandler> handler = nullptr);
 
   ~HTTPQuicCoroSession() override;
+
+  const folly::SocketAddress& getLocalAddress() const override;
+  const folly::SocketAddress& getPeerAddress() const noexcept override;
 
   folly::coro::TaskWithExecutor<void> run() override;
 

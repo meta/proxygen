@@ -535,6 +535,17 @@ HTTPQuicCoroSession::HTTPQuicCoroSession(
 }
 HTTPQuicCoroSession::~HTTPQuicCoroSession() = default;
 
+const folly::SocketAddress& HTTPQuicCoroSession::getLocalAddress() const {
+  return quic::toFollySocketAddressRef(quicSocket_->getLocalAddress(),
+                                       localAddr_);
+}
+
+const folly::SocketAddress& HTTPQuicCoroSession::getPeerAddress()
+    const noexcept {
+  return quic::toFollySocketAddressRef(quicSocket_->getPeerAddress(),
+                                       peerAddr_);
+}
+
 void HTTPQuicCoroSession::setEarlyDataHandler(
     std::unique_ptr<H3EarlyDataHandler> handler) {
   XCHECK(isUpstream());
