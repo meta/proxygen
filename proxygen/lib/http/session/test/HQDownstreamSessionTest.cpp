@@ -4215,6 +4215,30 @@ TEST_P(HQDownstreamSessionTestWebTransport, WTRequestNegotiates) {
   flushRequestsAndLoop();
 }
 
+TEST_P(HQDownstreamSessionTestWebTransport, WTRequestNegotiatesH3Token) {
+  HTTPMessage req;
+  req.setHTTPVersion(1, 1);
+  req.setUpgradeProtocol("webtransport-h3");
+  req.setMethod(HTTPMethod::CONNECT);
+  req.setURL("/webtransport");
+  req.getHeaders().set(HTTP_HEADER_HOST, "www.facebook.com");
+  auto sessionId = sendRequest(req, false);
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders();
+  flushRequestsAndLoopN(3);
+
+  HTTPMessage resp;
+  resp.setStatusCode(200);
+  handler->txn_->sendHeaders(resp);
+  EXPECT_NE(handler->txn_->getWebTransport(), nullptr);
+  handler->sendEOM();
+  handler->expectEOM();
+  handler->expectDetachTransaction();
+  socketDriver_->addReadEOF(sessionId, std::chrono::milliseconds(0));
+  hqSession_->closeWhenIdle();
+  flushRequestsAndLoop();
+}
+
 TEST_P(HQDownstreamSessionTestWebTransport, StopSendingBeforeWTStreamPreface) {
   const quic::StreamId sessionId = 0;
   const quic::StreamId wtStreamId = 4;

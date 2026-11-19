@@ -18,9 +18,11 @@ namespace proxygen {
 using WTProtocolError = HTTPWebTransport::WTProtocolError;
 
 /*static*/ bool HTTPWebTransport::isConnectMessage(const HTTPMessage& msg) {
+  const auto* protocol = msg.getUpgradeProtocol();
   return msg.isRequest() && msg.getMethod() == proxygen::HTTPMethod::CONNECT &&
-         msg.getUpgradeProtocol() &&
-         *msg.getUpgradeProtocol() == headers::kWebTransport;
+         protocol &&
+         (*protocol == headers::kWebTransport ||
+          *protocol == headers::kWebTransportH3);
 }
 
 /*static*/ HTTPMessage HTTPWebTransport::makeConnectRequest(

@@ -27,6 +27,7 @@ extern const std::string kWebsocketString;
 extern const std::string kStatus200;
 
 constexpr std::string_view kWebTransport{"webtransport"};
+constexpr std::string_view kWebTransportH3{"webtransport-h3"};
 constexpr std::string_view kSecWebTransportHttp3Draft02{
     "sec-webtransport-http3-draft02"};
 constexpr std::string_view kSecWebTransportHttp3Draft02Value{"1"};
