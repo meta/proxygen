@@ -121,6 +121,37 @@ class ServiceWorker {
     return nullptr;
   }
 
+  // Takes the live acceptor at `accAddress` out; the caller now owns it.
+  // nullptr if there is none.
+  [[nodiscard]] std::unique_ptr<wangle::Acceptor> releaseServiceAcceptor(
+      const AcceptorAddress& accAddress) {
+    auto it = acceptors_.find(accAddress);
+    if (it == acceptors_.end()) {
+      return nullptr;
+    }
+    auto acceptor = std::move(it->second);
+    acceptors_.erase(it);
+    if (auto named = namedAddress_.find(acceptor->getName());
+        named != namedAddress_.end() && named->second == accAddress) {
+      namedAddress_.erase(named);
+    }
+    return acceptor;
+  }
+
+  // Undoes drainServiceAcceptor(): the draining acceptor at `accAddress`
+  // serves again. False, and nothing changes, if nothing was draining there or
+  // something is live there.
+  bool restoreDrainingAcceptor(const AcceptorAddress& accAddress) {
+    auto it = drainingAcceptors_.find(accAddress);
+    if (it == drainingAcceptors_.end() || acceptors_.contains(accAddress)) {
+      return false;
+    }
+    namedAddress_.emplace(it->second->getName(), accAddress);
+    addAcceptor(accAddress, std::move(it->second), acceptors_);
+    drainingAcceptors_.erase(it);
+    return true;
+  }
+
   [[nodiscard]] RequestWorkerThread* getRequestWorkerThread() const {
     return worker_;
   }
