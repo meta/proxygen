@@ -1322,6 +1322,9 @@ class HTTPQuicCoroSession final
                     std::unique_ptr<folly::IOBuf> datagram);
 
   void resetIdleTimeout();
+  void interruptReadLoop() override {
+    idle_.signal();
+  }
 
   void onPriority(quic::StreamId, const HTTPPriority&) override;
   void onPushPriority(quic::StreamId, const HTTPPriority&) override {

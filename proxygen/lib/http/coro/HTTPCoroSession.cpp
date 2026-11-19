@@ -634,7 +634,7 @@ void HTTPQuicCoroSession::start() {
   // the same shared_ptr to the current protocol info.
   initQuicProtocolInfo(*currentQuicProtocolInfo_, *quicSocket_);
   setupTransportInfo_.protocolInfo = currentQuicProtocolInfo_;
-  quicSocket_->setConnectionCallback(this);
+  quicSocket_->setConnectionCallback(this, {.reportLocalClose = true});
   quicSocket_->setPingCallback(this);
   codec_.add<HTTPChecks>();
 
