@@ -9,6 +9,7 @@
 #pragma once
 
 #include "proxygen/lib/http/ProxygenErrorEnum.h"
+#include <proxygen/lib/http/codec/HTTPSettings.h>
 #include <proxygen/lib/http/codec/compress/HeaderCodec.h>
 #include <proxygen/lib/services/AcceptorConfiguration.h>
 #include <wangle/acceptor/Acceptor.h>
@@ -60,10 +61,12 @@ class HTTPCoroDownstreamSessionFactory {
                      const wangle::TransportInfo& tinfo,
                      std::shared_ptr<HTTPHandler> handler);
 
-  HTTPCoroSession* makeQuicSession(std::shared_ptr<quic::QuicSocket> quicSocket,
-                                   wangle::TransportInfo tinfo,
-                                   std::shared_ptr<HTTPHandler> handler,
-                                   bool strictValidation);
+  HTTPCoroSession* makeQuicSession(
+      std::shared_ptr<quic::QuicSocket> quicSocket,
+      wangle::TransportInfo tinfo,
+      std::shared_ptr<HTTPHandler> handler,
+      bool strictValidation,
+      const SettingsList& egressSettingsOverrides = {});
 
  private:
   void applySettingsToCodec(HTTPCodec& codec);

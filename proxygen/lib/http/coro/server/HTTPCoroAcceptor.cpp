@@ -126,12 +126,16 @@ HTTPCoroSession* HTTPCoroDownstreamSessionFactory::makeQuicSession(
     std::shared_ptr<quic::QuicSocket> quicSocket,
     wangle::TransportInfo tinfo,
     std::shared_ptr<HTTPHandler> handler,
-    bool /*strictValidation*/) {
+    bool /*strictValidation*/,
+    const SettingsList& egressSettingsOverrides) {
   auto codec =
       hq::HQMultiCodec::Factory::getCodec(TransportDirection::DOWNSTREAM,
                                           codecFactory_->useStrictValidation(),
                                           accConfig_->headerIndexingStrategy);
   applySettingsToCodec(*codec);
+  for (const auto& setting : egressSettingsOverrides) {
+    codec->getEgressSettings()->setSetting(setting.id, setting.value);
+  }
   XLOG(DBG4) << "Created new " << *tinfo.appProtocol << " session for peer "
              << quic::toFollySocketAddress(quicSocket->getPeerAddress());
   HTTPCoroSession* session =
