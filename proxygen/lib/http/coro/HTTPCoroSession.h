@@ -412,6 +412,10 @@ class HTTPCoroSession
 
   void setSetting(SettingsId setting, uint32_t value);
 
+  void enableDoubleGoawayDrain() {
+    codec_.enableDoubleGoawayDrain();
+  }
+
   virtual void sendPing() = 0;
 
   virtual void setConnectionFlowControl(uint32_t connFlowControl) = 0;

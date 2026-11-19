@@ -161,6 +161,12 @@ class HQMultiCodec : public HQControlCodec {
     return !sentGoaway_;
   }
 
+  StreamID getLastIncomingStreamID() const override {
+    return transportDirection_ == TransportDirection::DOWNSTREAM
+               ? minUnseenStreamID_
+               : minUnseenPushID_;
+  }
+
   bool isParserPaused() const override {
     auto res = getCurrentCodec().isParserPaused();
     currentStream_ = HTTPCodec::MaxStreamID;
