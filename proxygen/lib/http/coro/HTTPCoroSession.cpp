@@ -3060,11 +3060,12 @@ void HTTPQuicCoroSession::dispatchWTStream(quic::StreamId streamId,
     return;
   }
 
-  // a downstream can see a wt stream before its CONNECT stream's headers
+  // a downstream can see a wt stream before its CONNECT stream's headers, and
+  // an upstream parses the 2xx before sendWtReq creates the wt session
   const bool connectMayArrive = !connectStream && isDownstream() &&
                                 quic::isBidirectionalStream(sessionId);
   if (((connectStream && connectStream->isWtConnectStream() &&
-        connectStream->isUpgradePending()) ||
+        (connectStream->isUpgradePending() || connectStream->isUpgraded())) ||
        connectMayArrive) &&
       !peerRejectedWt()) {
     holdWtStream(sessionId, streamId);
