@@ -72,7 +72,7 @@ DEFINE_string(gap_ms,
               "Comma separated list of gaps in ms between requests");
 DEFINE_string(congestion,
               "cubic",
-              "newreno/cubic/bbr/bbr2/bbr2modular/copa/c4/none");
+              "newreno/cubic/bbr/bbr2/bbr2modular/bbr3/copa/c4/none");
 DEFINE_int32(conn_flow_control, 1024 * 1024 * 10, "Connection flow control");
 DEFINE_int32(stream_flow_control, 256 * 1024, "Stream flow control");
 DEFINE_int32(max_receive_packet_size,
