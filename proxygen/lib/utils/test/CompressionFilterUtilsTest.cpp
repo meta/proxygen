@@ -37,6 +37,13 @@ TEST_F(DetermineCompressionTypeTest, GzipWithQuality) {
   EXPECT_EQ(determineType("gzip; q=5.0"), CodecType::ZLIB);
 }
 
+TEST_F(DetermineCompressionTypeTest, ZeroQualityNotAcceptable) {
+  EXPECT_EQ(determineType("gzip;q=0"), CodecType::NO_COMPRESSION);
+  EXPECT_EQ(determineType("zstd; q=0.0"), CodecType::NO_COMPRESSION);
+  EXPECT_EQ(determineType("zstd;q=0, gzip"), CodecType::ZLIB);
+  EXPECT_EQ(determineType("gzip;q=0, zstd;q=0.5"), CodecType::ZSTD);
+}
+
 TEST_F(DetermineCompressionTypeTest, Empty) {
   EXPECT_EQ(determineType(""), CodecType::NO_COMPRESSION);
 }
