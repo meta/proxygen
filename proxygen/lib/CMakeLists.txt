@@ -33,6 +33,7 @@ add_custom_command(
         ${CMAKE_CURRENT_SOURCE_DIR}/stats/gen_StatsWrapper.sh
         ${PROXYGEN_FBCODE_ROOT}
     DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/stats/gen_StatsWrapper.sh
         ${CMAKE_CURRENT_SOURCE_DIR}/stats/BaseStats.h
     COMMENT "Generating StatsWrapper.h"
 )
@@ -52,6 +53,10 @@ add_custom_command(
         --header_path=proxygen/lib/utils
         --install_dir=${PROXYGEN_GENERATED_ROOT}/proxygen/lib/utils
         --fbcode_dir=${PROXYGEN_FBCODE_ROOT}
+    DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/utils/gen_trace_event_constants.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/utils/samples/TraceEventType.txt
+        ${CMAKE_CURRENT_SOURCE_DIR}/utils/samples/TraceFieldType.txt
     WORKING_DIRECTORY
         ${CMAKE_CURRENT_SOURCE_DIR}/utils/
     COMMENT "Generating TraceEventType and TraceFieldType"
