@@ -28,7 +28,7 @@ class SafePath {
    * - normalizes file path
    * - checks if the normalized path matches with any of the whitelisted values
    * - if useRealPaths is enabled, then the file path's real path will be used
-   * for validation
+   * for validation and returned
    * - throws error if the normalized path doesn't belong to the whitelist
    */
   static std::string getPath(const std::string& filePath,
@@ -40,7 +40,7 @@ class SafePath {
    * - normalizes file path
    * - checks if the normalized path starts with the given base directory
    * - if useRealPaths is enabled, then the file path's real path will be used
-   * for validation
+   * for validation and returned
    * - throws error if the prefix and/or suffix dont match
    */
   static std::string getPath(const std::string& filePath,
@@ -52,7 +52,7 @@ class SafePath {
    * - normalizes file path
    * - checks if the normalized path starts with the given base directory
    * - if useRealPaths is enabled, then the file path's real path will be used
-   * for validation
+   * for validation and returned
    * - returns unexpected variant if the prefix and/or suffix dont match
    */
   static folly::Expected<std::string, folly::exception_wrapper> getPathSafe(

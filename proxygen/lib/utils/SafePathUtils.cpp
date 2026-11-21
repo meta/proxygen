@@ -81,7 +81,7 @@ std::string SafePath::getPath(const std::string& filePath,
                     useRealPaths,
                     normalizedPath));
   }
-  return normalizedPath;
+  return finalFilePath;
 }
 
 folly::Expected<std::string, folly::exception_wrapper> SafePath::getPathSafe(
@@ -132,7 +132,7 @@ folly::Expected<std::string, folly::exception_wrapper> SafePath::getPathSafe(
   }
 
   return folly::makeExpected<folly::exception_wrapper>(
-      std::move(normalizedPath));
+      std::move(finalFilePath));
 }
 
 std::string SafePath::getPath(const std::string& filePath,
