@@ -4150,6 +4150,179 @@ INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
 
 class HQDownstreamSessionTestWebTransport : public HQDownstreamSessionTest {};
 
+// The server always sends WebTransport limits here; WebTransport flow control
+// is on only if the client sends some too.
+class HQDownstreamSessionTestWtFlowControl
+    : public HQDownstreamSessionTestWebTransport {
+ protected:
+  static constexpr uint64_t kLargeFc = std::numeric_limits<uint32_t>::max();
+  static constexpr uint8_t kWtUniPrefixLen = 3; // stream type + session id
+
+  // the client's SETTINGS, processed before any request
+  void sendClientSettings() {
+    sendSettings();
+    loopNonBlocking();
+  }
+
+  // the client's SETTINGS without WebTransport limits, as a draft-02 browser
+  // sends them
+  void sendSettingsWithoutWtLimits() {
+    egressSettings_.unsetSetting(SettingsId::WT_INITIAL_MAX_DATA);
+    sendClientSettings();
+  }
+
+  static HTTPMessage wtConnect() {
+    auto req = getWtReq();
+    req.setURL("/webtransport");
+    req.getHeaders().set(HTTP_HEADER_HOST, "www.facebook.com");
+    return req;
+  }
+
+  // the next request handler accepts its CONNECT with an HqWtSession
+  std::shared_ptr<proxygen::test::DummyWtHandler::Ctx> expectWtAccept() {
+    auto wtHandler =
+        std::make_shared<std::unique_ptr<proxygen::test::DummyWtHandler>>(
+            proxygen::test::DummyWtHandler::make());
+    auto wtCtx = (*wtHandler)->ctx;
+    auto* handler = handlers_.emplace_back(addSimpleStrictHandler()).get();
+    handler->expectHeaders([handler, wtHandler]() {
+      HTTPMessage resp;
+      resp.setStatusCode(200);
+      handler->txn_->sendWtHeaders(resp, std::move(*wtHandler));
+    });
+    handler->expectDetachTransaction();
+    return wtCtx;
+  }
+
+  // sends a CONNECT on the next stream and accepts it with an HqWtSession
+  std::shared_ptr<proxygen::test::DummyWtHandler::Ctx> acceptWtSession() {
+    sendRequest(wtConnect(), /*eom=*/false);
+    auto wtCtx = expectWtAccept();
+    loopNonBlocking();
+    return wtCtx;
+  }
+
+  // runs the queued work only, so that no timer such as the idle timeout fires
+  void loopNonBlocking() {
+    flushRequests();
+    for (int i = 0; i < 5; ++i) {
+      eventBase_.loopOnce(EVLOOP_NONBLOCK);
+    }
+  }
+
+  void endSessions(std::initializer_list<quic::StreamId> sessionIds) {
+    for (auto id : sessionIds) {
+      socketDriver_->addReadEOF(id, std::chrono::milliseconds(0));
+    }
+    hqSession_->closeWhenIdle();
+    flushRequestsAndLoop();
+  }
+
+  std::vector<std::unique_ptr<StrictMock<MockHTTPHandler>>> handlers_;
+};
+
+TEST_P(HQDownstreamSessionTestWtFlowControl, NoClientLimitsLeavesQuicLimits) {
+  sendSettingsWithoutWtLimits();
+  auto wtCtx = acceptWtSession();
+  ASSERT_NE(wtCtx->wtSession, nullptr);
+  auto& wt = *wtCtx->wtSession;
+  socketDriver_->setMaxUniStreams(100);
+  socketDriver_->setMaxBidiStreams(100);
+  socketDriver_->setConnectionFlowControlWindow(kLargeFc);
+
+  // with flow control on, the client's missing limits would allow no stream
+  // and no byte
+  constexpr int kStreams = 12;
+  std::vector<WebTransport::StreamWriteHandle*> uniStreams;
+  for (int i = 0; i < kStreams; ++i) {
+    auto uni = wt.createUniStream();
+    ASSERT_TRUE(uni.hasValue());
+    uniStreams.push_back(uni.value());
+    ASSERT_TRUE(wt.createBidiStream().hasValue());
+  }
+
+  constexpr size_t kLen = 100'000;
+  auto id = uniStreams[0]->getID();
+  socketDriver_->setStreamFlowControlWindow(id, kLargeFc);
+  uniStreams[0]->writeStreamData(makeBuf(kLen), /*fin=*/false, nullptr);
+  loopNonBlocking();
+  EXPECT_EQ(socketDriver_->streams_[id].nextWriteOffset,
+            kLen + kWtUniPrefixLen);
+  EXPECT_FALSE(socketDriver_->streams_[id].error.has_value());
+
+  endSessions({0});
+}
+
+TEST_P(HQDownstreamSessionTestWtFlowControl, ClientLimitsAreEnforced) {
+  // with the fixture's WT_INITIAL_MAX_DATA of 65536 and no bidi limit
+  egressSettings_.setSetting(SettingsId::WT_INITIAL_MAX_STREAMS_UNI, 2);
+  sendClientSettings();
+  auto wtCtx = acceptWtSession();
+  ASSERT_NE(wtCtx->wtSession, nullptr);
+  auto& wt = *wtCtx->wtSession;
+  socketDriver_->setMaxUniStreams(100);
+  socketDriver_->setMaxBidiStreams(100);
+  socketDriver_->setConnectionFlowControlWindow(kLargeFc);
+
+  auto uni = wt.createUniStream();
+  ASSERT_TRUE(uni.hasValue());
+  EXPECT_TRUE(wt.createUniStream().hasValue());
+  EXPECT_TRUE(wt.createUniStream().hasError());
+  EXPECT_TRUE(wt.createBidiStream().hasError());
+
+  auto id = uni.value()->getID();
+  socketDriver_->setStreamFlowControlWindow(id, kLargeFc);
+  uni.value()->writeStreamData(makeBuf(100'000), /*fin=*/false, nullptr);
+  loopNonBlocking();
+  EXPECT_EQ(socketDriver_->streams_[id].nextWriteOffset,
+            65536 + kWtUniPrefixLen);
+
+  endSessions({0});
+}
+
+// With wt flow control off a session can use up the client's quic stream
+// credit; it resumes when the client grants more.
+TEST_P(HQDownstreamSessionTestWtFlowControl, RecoversQuicStreamCredit) {
+  sendSettingsWithoutWtLimits();
+  auto wtCtx = acceptWtSession();
+  ASSERT_NE(wtCtx->wtSession, nullptr);
+  auto& wt = *wtCtx->wtSession;
+  socketDriver_->setMaxBidiStreams(1);
+  auto sock = socketDriver_->getSocket();
+  while (sock->getNumOpenableUnidirectionalStreams() > 0) {
+    ASSERT_TRUE(wt.createUniStream().hasValue());
+  }
+  while (sock->getNumOpenableBidirectionalStreams() > 0) {
+    ASSERT_TRUE(wt.createBidiStream().hasValue());
+  }
+  EXPECT_TRUE(wt.createUniStream().hasError());
+  EXPECT_TRUE(wt.createBidiStream().hasError());
+  auto uniCredit = wt.awaitUniStreamCredit();
+  auto bidiCredit = wt.awaitBidiStreamCredit();
+  EXPECT_FALSE(uniCredit.isReady());
+  EXPECT_FALSE(bidiCredit.isReady());
+
+  socketDriver_->setMaxUniStreams(100);
+  socketDriver_->setMaxBidiStreams(100);
+  EXPECT_TRUE(uniCredit.isReady());
+  EXPECT_TRUE(bidiCredit.isReady());
+  EXPECT_TRUE(wt.createUniStream().hasValue());
+  EXPECT_TRUE(wt.createBidiStream().hasValue());
+
+  endSessions({0});
+}
+
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
+                         HQDownstreamSessionTestWtFlowControl,
+                         Values([] {
+                           TestParams tp;
+                           tp.alpn_ = "h3";
+                           tp.shouldSendSettings_ = false;
+                           tp.webTransport_ = true;
+                           return tp;
+                         }()),
+                         paramsToTestName);
+
 // Verifies the crash window from the moxygen bug report (SIGSEGV in
 // MoQServer::Handler::onWebTransportUniStream after clientSession_ was nulled).
 //

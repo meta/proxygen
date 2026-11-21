@@ -25,6 +25,17 @@ WtConfig& overwritePeerMaxDataWtConfig(WtConfig& config) {
   return config;
 }
 
+// unless both endpoints opted into wt flow control, only the quic limits apply
+WtConfig& overwriteH3WtConfig(WtConfig& config) {
+  if (!h3WtFlowControlEnabled(config)) {
+    XLOG(DBG4) << "wt flow control off";
+    config.selfMaxStreamsBidi = config.selfMaxStreamsUni =
+        config.selfMaxConnData = config.peerMaxStreamsBidi =
+            config.peerMaxStreamsUni = config.peerMaxConnData = kMaxVarint;
+  }
+  return config;
+}
+
 WtConfig createQuicConfig(const quic::TransportSettings& settings) {
   WtConfig config;
   config.selfMaxStreamsBidi = kMaxVarint;
@@ -259,6 +270,18 @@ QuicWtSessionBase::createBidiStream() noexcept {
   XCHECK(res.readHandle && res.writeHandle);
   XLOG(DBG6) << __func__ << "; id=" << *id;
   return res;
+}
+
+void QuicWtSessionBase::onQuicUniStreamCredit() noexcept {
+  if (hasEgressUniCredit()) {
+    onUniStreamCreditAvail();
+  }
+}
+
+void QuicWtSessionBase::onQuicBidiStreamCredit() noexcept {
+  if (hasEgressBidiCredit()) {
+    onBidiStreamCreditAvail();
+  }
 }
 
 folly::SemiFuture<folly::Unit>
@@ -619,7 +642,7 @@ H3WtSession::H3WtSession(std::shared_ptr<quic::QuicSocket> quicSocket,
     : QuicWtSessionBase(
           std::move(quicSocket),
           WtHandlerPtr{wtHandler.release(), WtHandlerDeleter{.owning = true}},
-          std::move(wtConfig),
+          std::move(overwriteH3WtConfig(wtConfig)),
           /*usesEncodedApplicationErrorCodes=*/true,
           &observer),
       connectStreamId_(connectStreamId) {

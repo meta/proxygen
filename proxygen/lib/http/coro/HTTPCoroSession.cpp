@@ -2803,6 +2803,32 @@ void HTTPQuicCoroSession::onBidirectionalStreamsAvailable(
     // Conservatively assume we were at 0
     onSetMaxInitiatedStreams(/*didSupport=*/false);
   }
+  if (numStreamsAvailable > 0) {
+    onWtStreamCredit(/*bidi=*/true);
+  }
+}
+
+void HTTPQuicCoroSession::onUnidirectionalStreamsAvailable(
+    uint64_t numStreamsAvailable) noexcept {
+  if (numStreamsAvailable > 0) {
+    onWtStreamCredit(/*bidi=*/false);
+  }
+}
+
+void HTTPQuicCoroSession::onWtStreamCredit(bool bidi) noexcept {
+  std::vector<std::shared_ptr<detail::H3CoroWtSession>> wtSessions;
+  for (auto& [_, stream] : streams_) {
+    if (stream->wtSession) {
+      wtSessions.push_back(stream->wtSession);
+    }
+  }
+  for (auto& wtSession : wtSessions) {
+    if (bidi) {
+      wtSession->wtSession().onQuicBidiStreamCredit();
+    } else {
+      wtSession->wtSession().onQuicUniStreamCredit();
+    }
+  }
 }
 
 void HTTPQuicCoroSession::onConnectionEnd() noexcept {

@@ -58,6 +58,10 @@ class QuicWtSessionBase
   folly::SemiFuture<folly::Unit> awaitUniStreamCredit() noexcept override;
   folly::SemiFuture<folly::Unit> awaitBidiStreamCredit() noexcept override;
 
+  // for a backing http/3 session to report new quic stream credit
+  void onQuicUniStreamCredit() noexcept;
+  void onQuicBidiStreamCredit() noexcept;
+
   folly::Expected<folly::Unit, ErrorCode> sendDatagram(
       IoBufPtr datagram) noexcept override;
 

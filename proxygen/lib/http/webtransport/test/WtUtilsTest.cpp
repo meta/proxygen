@@ -26,6 +26,26 @@ std::string coalesceToString(folly::IOBufQueue& queue) {
 
 } // namespace
 
+// draft-ietf-webtrans-http3-17 §5.1
+TEST(WtUtilsTest, H3WtFlowControlNeedsANonZeroLimitFromEachSide) {
+  const HTTPSettings limit{{SettingsId::WT_INITIAL_MAX_DATA, 1}};
+  auto enabled = [](const HTTPSettings& peer, const HTTPSettings& self) {
+    return detail::h3WtFlowControlEnabled(detail::getH3WtConfig(&peer, &self));
+  };
+  for (auto id : {SettingsId::WT_INITIAL_MAX_STREAMS_UNI,
+                  SettingsId::WT_INITIAL_MAX_STREAMS_BIDI,
+                  SettingsId::WT_INITIAL_MAX_DATA}) {
+    const HTTPSettings one{{id, 1}};
+    EXPECT_TRUE(enabled(one, limit));
+    EXPECT_TRUE(enabled(limit, one));
+    const HTTPSettings zero{{id, 0}};
+    EXPECT_FALSE(enabled(zero, limit));
+    EXPECT_FALSE(enabled(limit, zero));
+  }
+  const HTTPSettings none;
+  EXPECT_FALSE(enabled(none, none));
+}
+
 TEST(WtUtilsTest, SupportsH3WtUpstreamUsesLocalSettings) {
   HTTPSettings local;
   local.setSetting(SettingsId::WT_ENABLED, 1);

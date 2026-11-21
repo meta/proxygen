@@ -157,6 +157,16 @@ WtStreamManager::WtConfig getWtConfig(const HTTPSettings* ingress,
   return config;
 }
 
+bool h3WtFlowControlEnabled(const WtStreamManager::WtConfig& config) noexcept {
+  const bool selfSendsLimit = config.selfMaxStreamsUni ||
+                              config.selfMaxStreamsBidi ||
+                              config.selfMaxConnData;
+  const bool peerSendsLimit = config.peerMaxStreamsUni ||
+                              config.peerMaxStreamsBidi ||
+                              config.peerMaxConnData;
+  return selfSendsLimit && peerSendsLimit;
+}
+
 WtStreamManager::WtConfig getH3WtConfig(const HTTPSettings* ingress,
                                         const HTTPSettings* egress) {
   WtStreamManager::WtConfig config = getWtConfig(ingress, egress);

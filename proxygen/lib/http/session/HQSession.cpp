@@ -248,6 +248,32 @@ void HQSession::onBidirectionalStreamsAvailable(
       infoCallback_->onSettingsOutgoingStreamsNotFull(*this);
     }
   }
+  if (numStreamsAvailable > 0) {
+    onWtStreamCredit(/*bidi=*/true);
+  }
+}
+
+void HQSession::onUnidirectionalStreamsAvailable(
+    uint64_t numStreamsAvailable) noexcept {
+  if (numStreamsAvailable > 0) {
+    onWtStreamCredit(/*bidi=*/false);
+  }
+}
+
+void HQSession::onWtStreamCredit(bool bidi) noexcept {
+  std::vector<std::shared_ptr<H3WtSession>> wtSessions;
+  for (auto& [_, stream] : streams_) {
+    if (stream.wtSess_) {
+      wtSessions.push_back(stream.wtSess_);
+    }
+  }
+  for (auto& wtSess : wtSessions) {
+    if (bidi) {
+      wtSess->onQuicBidiStreamCredit();
+    } else {
+      wtSess->onQuicUniStreamCredit();
+    }
+  }
 }
 
 void HQSession::onNewUnidirectionalStream(quic::StreamId id) noexcept {

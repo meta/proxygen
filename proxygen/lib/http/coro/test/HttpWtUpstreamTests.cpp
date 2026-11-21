@@ -1079,6 +1079,35 @@ CO_TEST_P_X(H3WtTest, RoutesPeerStreams) {
   EXPECT_EQ(read->value().data->computeChainDataLength(), kBufLen);
 }
 
+// A session that used up the server's quic stream credit resumes when the
+// server grants more.
+CO_TEST_P_X(H3WtTest, RecoversQuicStreamCredit) {
+  co_await establishWtSession();
+  auto& driver = muxTp->socketDriver_;
+  driver.setMaxBidiStreams(2);
+  auto sock = driver.getSocket();
+  while (sock->getNumOpenableUnidirectionalStreams() > 0) {
+    CO_ASSERT_TRUE(wt->createUniStream().hasValue());
+  }
+  while (sock->getNumOpenableBidirectionalStreams() > 0) {
+    CO_ASSERT_TRUE(wt->createBidiStream().hasValue());
+  }
+  EXPECT_TRUE(wt->createUniStream().hasError());
+  EXPECT_TRUE(wt->createBidiStream().hasError());
+  auto uniCredit = wt->awaitUniStreamCredit();
+  auto bidiCredit = wt->awaitBidiStreamCredit();
+  EXPECT_FALSE(uniCredit.isReady());
+  EXPECT_FALSE(bidiCredit.isReady());
+
+  driver.setMaxUniStreams(100);
+  driver.setMaxBidiStreams(100);
+  EXPECT_TRUE(uniCredit.isReady());
+  EXPECT_TRUE(bidiCredit.isReady());
+  EXPECT_TRUE(wt->createUniStream().hasValue());
+  EXPECT_TRUE(wt->createBidiStream().hasValue());
+  wt->closeSession(folly::none);
+}
+
 CO_TEST_P_X(H3WtTest, Datagrams) {
   co_await establishWtSession();
   XCHECK_NE(wt, nullptr);

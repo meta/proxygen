@@ -1175,6 +1175,10 @@ class HTTPQuicCoroSession final
   void onConnectionError(quic::QuicError error) noexcept override;
   void onBidirectionalStreamsAvailable(
       uint64_t numStreamsAvailable) noexcept override;
+  void onUnidirectionalStreamsAvailable(
+      uint64_t numStreamsAvailable) noexcept override;
+  // tells live wt sessions that quic granted more stream credit
+  void onWtStreamCredit(bool bidi) noexcept;
 
   // quic::QuicSocket::PingCallback
   void pingAcknowledged() noexcept override {

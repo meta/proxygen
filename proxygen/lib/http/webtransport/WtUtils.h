@@ -37,6 +37,11 @@ WtStreamManager::WtConfig getWtConfig(const HTTPSettings* ingress,
 WtStreamManager::WtConfig getH3WtConfig(const HTTPSettings* ingress,
                                         const HTTPSettings* egress);
 
+// draft-ietf-webtrans-http3-17 Section 5.1: wt flow control is on only if both
+// endpoints send a non-zero WT_INITIAL_MAX_STREAMS_UNI, _STREAMS_BIDI or _DATA
+// (the settings of Section 5.5); getWtConfig maps a missing setting to 0
+bool h3WtFlowControlEnabled(const WtStreamManager::WtConfig& config) noexcept;
+
 // http/3 specific, writes the wt frame prefix to the IOBufQueue
 void writeWtUniFramePrefix(folly::IOBufQueue& q,
                            uint64_t connectStreamId) noexcept;

@@ -195,6 +195,9 @@ class HQSession
   void onBidirectionalStreamsAvailable(
       uint64_t /*numStreamsAvailable*/) noexcept override;
 
+  void onUnidirectionalStreamsAvailable(
+      uint64_t numStreamsAvailable) noexcept override;
+
   void onStopSending(quic::StreamId id,
                      quic::ApplicationErrorCode error) noexcept override;
 
@@ -747,6 +750,9 @@ class HQSession
     return advertisedWebTransport() &&
            (!receivedSettings_ || peerAdvertisedWebTransport());
   }
+
+  // tells live wt sessions that quic granted more stream credit
+  void onWtStreamCredit(bool bidi) noexcept;
 
   std::unique_ptr<HTTPCodec> createStreamCodec(quic::StreamId streamId);
 

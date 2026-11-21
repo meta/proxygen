@@ -1440,3 +1440,97 @@ TEST_F(QuicWtSessionReadCallbackTest,
        ReadEOFBeforeDestroyDuringByteCancellation) {
   destroyDuringByteCancellation(true);
 }
+
+namespace {
+using WtConfig = detail::WtStreamManager::WtConfig;
+
+// what getH3WtConfig builds when the peer sends no WebTransport limits, as a
+// draft-02 browser does
+WtConfig noPeerLimits() {
+  WtConfig config;
+  config.peerMaxStreamsBidi = config.peerMaxStreamsUni =
+      config.peerMaxConnData = 0;
+  return config;
+}
+
+WtConfig noSelfLimits() {
+  WtConfig config;
+  config.selfMaxStreamsBidi = config.selfMaxStreamsUni =
+      config.selfMaxConnData = 0;
+  return config;
+}
+} // namespace
+
+// draft-ietf-webtrans-http3-17 §5.1: unless each side sends a WebTransport
+// limit, an H3WtSession leaves flow control to QUIC.
+class H3WtSessionFlowControlTest : public Test {
+ protected:
+  void makeSession(WtConfig config) {
+    session_ = std::make_shared<H3WtSession>(
+        socketDriver_.getSocket(),
+        std::make_unique<NiceMock<MockWebTransportHandler>>(),
+        config,
+        /*connectStreamId=*/0,
+        connectStreamCb_);
+    socketDriver_.setMaxUniStreams(100);
+    socketDriver_.setMaxBidiStreams(100);
+  }
+
+  void TearDown() override {
+    session_->closeSession(folly::none);
+    socketDriver_.closeImpl({});
+  }
+
+  void expectOnlyQuicLimits() {
+    // more streams each way than any limit either side sent
+    for (uint64_t i = 0; i < 20; ++i) {
+      ASSERT_TRUE(session_->createUniStream().hasValue());
+      ASSERT_TRUE(session_->createBidiStream().hasValue());
+      ASSERT_TRUE(session_->acquireIngressStream(/*client uni=*/4 * i + 2));
+    }
+    // a lower limit from the peer is ignored, and no limit goes back to it
+    session_->onMaxStreams(detail::WtStreamManager::MaxStreamsUni{1});
+    EXPECT_TRUE(session_->createUniStream().hasValue());
+    EXPECT_TRUE(connectStreamCb_.events.empty());
+  }
+
+  folly::EventBase eventBase_;
+  MockQuicSocketDriver socketDriver_{
+      &eventBase_,
+      nullptr,
+      nullptr,
+      MockQuicSocketDriver::TransportEnum::SERVER,
+      "alpn1"};
+  std::shared_ptr<H3WtSession> session_;
+
+  struct H3ConnectCb : public proxygen::H3ConnectStreamCallback {
+    H3ConnectCb() : H3ConnectStreamCallback(writeBuf) {
+    }
+    void onEvent(detail::WtStreamManager::Event&& ev) noexcept override {
+      events.push_back(std::move(ev));
+    }
+    folly::IOBufQueue writeBuf;
+    std::vector<detail::WtStreamManager::Event> events;
+  } connectStreamCb_;
+};
+
+TEST_F(H3WtSessionFlowControlTest, NoPeerLimitsLeavesOnlyQuicLimits) {
+  makeSession(noPeerLimits());
+  expectOnlyQuicLimits();
+}
+
+TEST_F(H3WtSessionFlowControlTest, NoSelfLimitsLeavesOnlyQuicLimits) {
+  makeSession(noSelfLimits());
+  expectOnlyQuicLimits();
+}
+
+TEST_F(H3WtSessionFlowControlTest, LimitsFromBothSidesAreKept) {
+  WtConfig config;
+  config.peerMaxStreamsUni = 2;
+  config.peerMaxStreamsBidi = 0;
+  makeSession(config);
+  EXPECT_TRUE(session_->createUniStream().hasValue());
+  EXPECT_TRUE(session_->createUniStream().hasValue());
+  EXPECT_TRUE(session_->createUniStream().hasError());
+  EXPECT_TRUE(session_->createBidiStream().hasError());
+}
