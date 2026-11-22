@@ -151,6 +151,42 @@ class HTTPSessionBase : public wangle::ManagedConnection {
   }
 
   /**
+   * When true, consecutive socket reads fill the same read buffer, so ingress
+   * IOBufs held by consumers pin mostly data instead of one mostly empty buffer
+   * per read. Sets the default for new sessions; setReuseReadBufferTailroom()
+   * overrides it per session.
+   */
+  static void setDefaultReuseReadBufferTailroom(bool reuse) {
+    defaultReuseReadBufferTailroom_ = reuse;
+  }
+
+  void setReuseReadBufferTailroom(bool reuse) {
+    reuseReadBufferTailroom_ = reuse;
+  }
+
+  [[nodiscard]] bool getReuseReadBufferTailroom() const {
+    return reuseReadBufferTailroom_;
+  }
+
+  /**
+   * With read buffer tailroom reuse, the next socket read goes into the current
+   * buffer only while it has at least this many bytes free. Lower values fill
+   * buffers more fully at the cost of more, shorter reads. Sets the default for
+   * new sessions; setReadBufferReuseMinTailroom() overrides it per session.
+   */
+  static void setDefaultReadBufferReuseMinTailroom(uint32_t bytes) {
+    defaultReadBufferReuseMinTailroom_ = bytes;
+  }
+
+  void setReadBufferReuseMinTailroom(uint32_t bytes) {
+    readBufferReuseMinTailroom_ = bytes;
+  }
+
+  [[nodiscard]] uint32_t getReadBufferReuseMinTailroom() const {
+    return readBufferReuseMinTailroom_;
+  }
+
+  /**
    * Set the maximum egress body size for any outbound body bytes per loop,
    * when there are > 1 transactions.
    */
@@ -794,6 +830,14 @@ class HTTPSessionBase : public wangle::ManagedConnection {
    * The maximum size of the read buffer from the socket.
    */
   static uint32_t maxReadBufferSize_;
+
+  static bool defaultReuseReadBufferTailroom_;
+
+  bool reuseReadBufferTailroom_{defaultReuseReadBufferTailroom_};
+
+  static uint32_t defaultReadBufferReuseMinTailroom_;
+
+  uint32_t readBufferReuseMinTailroom_{defaultReadBufferReuseMinTailroom_};
 
   /**
    * Maximum number of bytes that can be buffered across all transactions before

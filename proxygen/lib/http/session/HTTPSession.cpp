@@ -432,10 +432,31 @@ bool HTTPSession::isDownstream() const {
 
 void HTTPSession::getReadBuffer(void** buf, size_t* bufSize) {
   FOLLY_SCOPED_TRACE_SECTION("HTTPSession - getReadBuffer");
-  pair<void*, uint32_t> readSpace =
-      readBuf_.preallocate(kMinReadSize, HTTPSessionBase::maxReadBufferSize_);
-  *buf = readSpace.first;
-  *bufSize = readSpace.second;
+  readIntoFill_ = getReuseReadBufferTailroom();
+  if (!readIntoFill_) {
+    pair<void*, uint32_t> readSpace =
+        readBuf_.preallocate(kMinReadSize, HTTPSessionBase::maxReadBufferSize_);
+    *buf = readSpace.first;
+    *bufSize = readSpace.second;
+    return;
+  }
+  const size_t minTailroom =
+      std::max<uint32_t>(1, getReadBufferReuseMinTailroom());
+  if (!readFill_ || readFill_->tailroom() < minTailroom) {
+    readFill_ = folly::IOBuf::create(
+        std::max(kMinReadSize, HTTPSessionBase::maxReadBufferSize_));
+  }
+  *buf = readFill_->writableTail();
+  *bufSize = readFill_->tailroom();
+}
+
+void HTTPSession::appendFilledReadBytes(size_t readSize) {
+  auto slice = readFill_->cloneOne();
+  slice->append(readSize);
+  slice->trimWritableTail(slice->tailroom());
+  readFill_->append(readSize);
+  readFill_->trimStart(readSize);
+  readBuf_.append(std::move(slice), /*pack=*/false);
 }
 
 void HTTPSession::readDataAvailable(size_t readSize) noexcept {
@@ -454,7 +475,11 @@ void HTTPSession::readDataAvailable(size_t readSize) noexcept {
             << " bytes=" << readSize;
     return;
   }
-  readBuf_.postallocate(readSize);
+  if (readIntoFill_) {
+    appendFilledReadBytes(readSize);
+  } else {
+    readBuf_.postallocate(readSize);
+  }
 
   if (infoCallback_) {
     infoCallback_->onRead(*this, readSize, HTTPCodec::NoStream);

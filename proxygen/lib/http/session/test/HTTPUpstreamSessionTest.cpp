@@ -12,6 +12,7 @@
 #include <folly/io/async/TimeoutManager.h>
 #include <folly/io/async/test/MockAsyncTransport.h>
 #include <folly/portability/GTest.h>
+#include <folly/portability/Malloc.h>
 #include <proxygen/lib/http/codec/HTTPCodecFactory.h>
 #include <proxygen/lib/http/codec/test/MockHTTPCodec.h>
 #include <proxygen/lib/http/codec/test/TestUtils.h>
@@ -27,6 +28,7 @@
 #include <proxygen/lib/test/TestAsyncTransport.h>
 #include <wangle/acceptor/ConnectionManager.h>
 
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -44,6 +46,37 @@ using namespace testing;
 namespace {
 
 void initSelfCodec(HTTPCodec&) {
+}
+
+constexpr uint32_t kHeldBodyLen = 60000;
+constexpr size_t kPacketSize = 1500;
+
+// Read buffers are separate heap allocations starting at IOBuf::buffer(); a
+// slice's capacity() may be trimmed, so ask the allocator for the real size.
+size_t pinnedAllocationBytes(
+    const std::vector<std::shared_ptr<folly::IOBuf>>& bodies) {
+  std::set<const uint8_t*> buffers;
+  for (const auto& body : bodies) {
+    const folly::IOBuf* cur = body.get();
+    do {
+      buffers.insert(cur->buffer());
+      cur = cur->next();
+    } while (cur != body.get());
+  }
+  size_t pinned = 0;
+  for (const auto* buffer : buffers) {
+    pinned += malloc_usable_size(const_cast<uint8_t*>(buffer));
+  }
+  return pinned;
+}
+
+std::unique_ptr<folly::IOBuf> concatenate(
+    const std::vector<std::shared_ptr<folly::IOBuf>>& bodies) {
+  folly::IOBufQueue queue;
+  for (const auto& body : bodies) {
+    queue.append(body->clone());
+  }
+  return queue.move();
 }
 
 } // namespace
@@ -228,7 +261,9 @@ class HTTPUpstreamTest
     readAndLoop(buf->data(), buf->length());
   }
 
-  void readAndLoop(const uint8_t* input, size_t length) {
+  void readAndLoop(const uint8_t* input,
+                   size_t length,
+                   size_t maxReadSize = std::numeric_limits<size_t>::max()) {
     CHECK_NOTNULL(readCallback_);
     void* buf;
     size_t bufSize;
@@ -237,13 +272,50 @@ class HTTPUpstreamTest
       // This is somewhat specific to our implementation, but currently we
       // always return at least some space from getReadBuffer
       CHECK_GT(bufSize, 0);
-      bufSize = std::min(bufSize, length);
+      minOfferedReadBufferSize_ = std::min(minOfferedReadBufferSize_, bufSize);
+      bufSize = std::min({bufSize, length, maxReadSize});
       memcpy(buf, input, bufSize);
       readCallback_->readDataAvailable(bufSize);
       eventBasePtr_->loop();
       length -= bufSize;
       input += bufSize;
     }
+  }
+
+  size_t minOfferedReadBufferSize_{std::numeric_limits<size_t>::max()};
+
+  struct HeldBody {
+    std::unique_ptr<folly::IOBuf> sent;
+    std::vector<std::shared_ptr<folly::IOBuf>> received;
+  };
+
+  // Serves one response whose body arrives in reads of at most packetSize
+  // bytes, and keeps every body IOBuf the handler receives.
+  HeldBody receiveBodyInPackets(uint32_t bodyLen, size_t packetSize) {
+    HeldBody held{.sent = makeBuf(bodyLen)};
+    auto egressCodec = makeServerCodec();
+    folly::IOBufQueue output(folly::IOBufQueue::cacheChainLength());
+    egressCodec->generateSettings(output);
+    HTTPMessage resp;
+    resp.setStatusCode(200);
+    egressCodec->generateHeader(output, 1, resp);
+    egressCodec->generateBody(
+        output, 1, held.sent->clone(), HTTPCodec::NoPadding, true /* eom */);
+    auto input = output.move();
+    input->coalesce();
+
+    auto handler = openTransaction();
+    handler->expectHeaders();
+    EXPECT_CALL(*handler, _onBodyWithOffset(_, _))
+        .WillRepeatedly([&](uint64_t, std::shared_ptr<folly::IOBuf> body) {
+          held.received.push_back(std::move(body));
+        });
+    handler->expectEOM();
+    handler->expectDetachTransaction();
+    handler->sendRequest();
+    readAndLoop(input->data(), input->length(), packetSize);
+    httpSession_->destroy();
+    return held;
   }
 
   void testBasicRequest();
@@ -1042,6 +1114,36 @@ TEST_F(HTTP2UpstreamSessionTest, BasicTrailers) {
   readAndLoop(input->data(), input->length());
 
   httpSession_->destroy();
+}
+
+// A consumer that keeps every body IOBuf (e.g. a download cache) pins the read
+// buffers the body was sliced from. These tests deliver the body in
+// packet-sized reads and measure the allocations the held body keeps alive.
+TEST_F(HTTP2UpstreamSessionTest, HeldBodyPinsLittleReadBufferMemory) {
+  httpSession_->setReadBufferReuseMinTailroom(512);
+
+  auto held = receiveBodyInPackets(kHeldBodyLen, kPacketSize);
+
+  EXPECT_TRUE(folly::IOBufEqualTo()(*held.sent, *concatenate(held.received)));
+  EXPECT_LE(pinnedAllocationBytes(held.received), kHeldBodyLen * 13 / 10);
+}
+
+TEST_F(HTTP2UpstreamSessionTest, HeldBodyDefaultReuseKeepsMinimumReadSize) {
+  auto held = receiveBodyInPackets(kHeldBodyLen, kPacketSize);
+
+  EXPECT_TRUE(folly::IOBufEqualTo()(*held.sent, *concatenate(held.received)));
+  EXPECT_GE(minOfferedReadBufferSize_, 1460);
+  EXPECT_LT(pinnedAllocationBytes(held.received), kHeldBodyLen * 2);
+}
+
+TEST_F(HTTP2UpstreamSessionTest,
+       HeldBodyPinsBufferPerReadWithoutTailroomReuse) {
+  httpSession_->setReuseReadBufferTailroom(false);
+
+  auto held = receiveBodyInPackets(kHeldBodyLen, kPacketSize);
+
+  EXPECT_TRUE(folly::IOBufEqualTo()(*held.sent, *concatenate(held.received)));
+  EXPECT_GE(pinnedAllocationBytes(held.received), kHeldBodyLen * 2);
 }
 
 TEST_F(HTTP2UpstreamSessionTest, HeadersThenBodyThenHeaders) {

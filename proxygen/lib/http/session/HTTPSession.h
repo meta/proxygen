@@ -380,6 +380,7 @@ class HTTPSession
   // AsyncTransport::ReadCallback methods
   void getReadBuffer(void** buf, size_t* bufSize) override;
   void readDataAvailable(size_t readSize) noexcept override;
+  void appendFilledReadBytes(size_t readSize);
   bool isBufferMovable() noexcept override;
   void readBufferAvailable(std::unique_ptr<folly::IOBuf>) noexcept override;
   void processReadData();
@@ -684,6 +685,15 @@ class HTTPSession
 
   /** Chain of ingress IOBufs */
   folly::IOBufQueue readBuf_{folly::IOBufQueue::cacheChainLength()};
+
+  /**
+   * Buffer whose tailroom receives the next socket read when
+   * reuseReadBufferTailroom_ is set. Each read is appended to readBuf_ as a
+   * separate IOBuf with no tailroom, so nothing downstream can write into the
+   * part of the buffer that later reads fill.
+   */
+  std::unique_ptr<folly::IOBuf> readFill_;
+  bool readIntoFill_{false};
 
   folly::F14NodeMap<HTTPCodec::StreamID, HTTPTransaction> transactions_;
   folly::F14FastSet<HTTPCodec::StreamID> transactionIds_;

@@ -21,6 +21,9 @@ using wangle::TransportInfo;
 namespace proxygen {
 std::atomic<uint32_t> HTTPSessionBase::kDefaultReadBufLimit{65536};
 uint32_t HTTPSessionBase::maxReadBufferSize_ = 4000;
+bool HTTPSessionBase::defaultReuseReadBufferTailroom_ = true;
+// Same as HTTPSession's minimum read size, so reuse never shortens a read.
+uint32_t HTTPSessionBase::defaultReadBufferReuseMinTailroom_ = 1460;
 uint32_t HTTPSessionBase::egressBodySizeLimit_ = 4096;
 uint32_t HTTPSessionBase::kDefaultWriteBufLimit = 65536;
 
