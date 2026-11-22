@@ -93,8 +93,15 @@ find_package(Zstd REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Threads)
-find_package(Cares REQUIRED)
 find_package(Glog REQUIRED)
+
+set(CARES_PACKAGE_NAME Cares)
+set(CARES_LIBRARY_NAME cares)
+if (APPLE)
+    set(CARES_PACKAGE_NAME c-ares)
+    set(CARES_LIBRARY_NAME c-ares::cares)
+endif (APPLE)
+find_package(${CARES_PACKAGE_NAME} REQUIRED)
 
 # Propagate glog's required compile definition to all proxygen targets.
 # glog 0.7+ requires GLOG_USE_GLOG_EXPORT but since glog::glog is linked

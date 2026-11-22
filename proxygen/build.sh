@@ -272,6 +272,7 @@ function setup_zstd() {
   mkdir -p "$ZSTD_BUILD_DIR"
   cd "$ZSTD_BUILD_DIR" || exit
   cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo           \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.10             \
     -DBUILD_TESTS=OFF                               \
     -DCMAKE_PREFIX_PATH="$ZSTD_INSTALL_DIR"         \
     -DCMAKE_INSTALL_PREFIX="$ZSTD_INSTALL_DIR"      \
