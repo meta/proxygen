@@ -887,6 +887,10 @@ class HTTPUniplexTransportSession final : public HTTPCoroSession {
 
   void setConnectionFlowControl(uint32_t connFlowControl) override;
 
+  // Resets the transport instead of waiting for a peer that may have stopped
+  // reading to accept the write in flight or the GOAWAY the drop queues.
+  void dropConnection(const std::string& errorMsg = "") override;
+
  private:
   folly::coro::Task<void> runImpl();
   void handleIngressLimitExceeded(HTTPCodec::StreamID streamID) override;
@@ -917,6 +921,9 @@ class HTTPUniplexTransportSession final : public HTTPCoroSession {
   std::list<PendingByteEvent> kernelWriteEvents_;
   RateLimitFilter* rateLimitFilter_{nullptr};
   folly::CancellationSource readCancellationSource_;
+  // Cancelled by dropConnection(); it stays cancelled, so every later write is
+  // cancelled too. A cancelled transport write resets the transport.
+  folly::CancellationSource writeCancellationSource_;
 
  public:
   void start();

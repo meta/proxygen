@@ -1498,6 +1498,11 @@ void HTTPCoroSession::dropConnection(const std::string& errorMsg) {
       HTTPErrorCode::INTERNAL_ERROR, errorMsg, HTTPErrorCode::DROPPED);
 }
 
+void HTTPUniplexTransportSession::dropConnection(const std::string& errorMsg) {
+  HTTPCoroSession::dropConnection(errorMsg);
+  writeCancellationSource_.requestCancellation();
+}
+
 int HTTPUniplexTransportSession::getAsyncTransportFD() const {
   folly::AsyncSocket* sock = nullptr;
   auto transport = coroTransport_->getTransport();
@@ -3496,8 +3501,9 @@ folly::coro::Task<void> HTTPUniplexTransportSession::writeLoop() noexcept {
       sessionBytesScheduled_ += writeLength;
       XLOG(DBG4) << "Writing length=" << writeLength << " sess=" << *this;
       byteEventObserver_.transportWrite(sessionBytesScheduled_);
-      auto result = co_await co_awaitTry(
-          coroTransport_->write(writeBuf, writeTimeout_, writeFlags));
+      auto result = co_await co_awaitTry(co_withCancellation(
+          writeCancellationSource_.getToken(),
+          coroTransport_->write(writeBuf, writeTimeout_, writeFlags)));
       if (result.hasException()) {
         XLOG(DBG4) << "Write error, err=" << result.exception()
                    << " sess=" << *this;

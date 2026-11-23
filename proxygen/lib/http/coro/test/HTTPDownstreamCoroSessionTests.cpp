@@ -3124,6 +3124,49 @@ TEST_P(H12DownstreamSessionTest, WriteTimeout) {
   expectedError_ = TransportErrorCode::NETWORK_ERROR;
 }
 
+// A dropped connection is reset at once: it does not wait for a peer that has
+// stopped reading to accept the write in flight, nor for the write timeout.
+TEST_P(H12DownstreamSessionTest, DropConnectionAbortsBlockedWrite) {
+  session_->setWriteTimeout(std::chrono::seconds(5));
+  sendRequest("/");
+
+  auto handler =
+      addSimpleStrictHandler([this](folly::EventBase *evb,
+                                    HTTPSessionContextPtr /*ctx*/,
+                                    HTTPSourceHolder requestSource)
+                                 -> folly::coro::Task<HTTPSourceHolder> {
+        auto id = co_await expectRequest(requestSource, HTTPMethod::GET, "/");
+        transport_->pauseWrites(id);
+        evb->runAfterDelay([this] { session_->dropConnection(); }, 50);
+        co_return HTTPFixedSource::makeFixedResponse(200, makeBuf(100));
+      });
+  bool resetBeforeWriteTimeout = false;
+  evb_.runAfterDelay(
+      [&] { resetBeforeWriteTimeout = transportState_.closedWithReset; }, 1000);
+  evb_.loop();
+  EXPECT_TRUE(resetBeforeWriteTimeout);
+  expectedError_ = TransportErrorCode::NETWORK_ERROR;
+}
+
+// H2 only, an H1 drop queues no write. The GOAWAY a drop queues while no write
+// is in flight is reset at once too, rather than waiting for a peer that has
+// stopped reading.
+TEST_P(H2DownstreamSessionTest, DropConnectionAbortsBlockedGoaway) {
+  session_->setWriteTimeout(std::chrono::seconds(5));
+  evb_.runAfterDelay(
+      [this] {
+        transport_->pauseWrites(0);
+        session_->dropConnection();
+      },
+      50);
+  bool resetBeforeWriteTimeout = false;
+  evb_.runAfterDelay(
+      [&] { resetBeforeWriteTimeout = transportState_.closedWithReset; }, 1000);
+  evb_.loop();
+  EXPECT_TRUE(resetBeforeWriteTimeout);
+  expectedError_ = TransportErrorCode::NETWORK_ERROR;
+}
+
 class HTTPContinueSource : public HTTPSource {
  public:
   HTTPContinueSource() {
