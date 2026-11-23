@@ -907,6 +907,94 @@ CO_TEST_P_X(H1UpstreamSessionTest, DrainAfterCodecNotReusable) {
   EXPECT_EQ(ex->msg, "Exceeded stream limit");
 }
 
+CO_TEST_P_X(H1UpstreamSessionTest, InformationalResponsesThenChunkedTrailers) {
+  auto responseSource = co_await co_awaitTry(
+      session_->sendRequest(HTTPFixedSource::makeFixedRequest("/")));
+  XCHECK(!responseSource.hasException());
+  transport_->addReadEvent(
+      folly::IOBuf::copyBuffer(
+          "HTTP/1.1 100 Continue\r\n\r\n"
+          "HTTP/1.1 102 Processing\r\n\r\n"
+          "HTTP/1.1 103 Early Hints\r\nX-Interim: yes\r\n\r\n"
+          "HTTP/1.1 200 OK\r\nX-Final: yes\r\n"
+          "Transfer-Encoding: chunked\r\n"
+          "Trailer: X-Test-Trailer\r\n\r\n"
+          "4\r\nbody\r\n0\r\nX-Test-Trailer: tail\r\n\r\n"),
+      false);
+
+  std::vector<std::pair<uint16_t, bool>> heads;
+  std::string payload;
+  size_t terminalBodyEvents = 0;
+  HTTPSourceReader reader(std::move(*responseSource));
+  reader
+      .onHeaders([&](std::unique_ptr<HTTPMessage> msg, bool final, bool eom) {
+        heads.emplace_back(msg->getStatusCode(), final);
+        EXPECT_FALSE(eom);
+        if (final) {
+          EXPECT_EQ(msg->getHeaders().getSingleOrEmpty("X-Final"), "yes");
+          EXPECT_FALSE(msg->getHeaders().exists("X-Interim"));
+        }
+        return HTTPSourceReader::Continue;
+      })
+      .onBody([&](BufQueue body, bool eom) {
+        EXPECT_EQ(terminalBodyEvents, 0);
+        if (eom) {
+          EXPECT_TRUE(body.empty());
+          ++terminalBodyEvents;
+        } else {
+          EXPECT_FALSE(body.empty());
+          if (!body.empty()) {
+            payload += body.move()->toString();
+          }
+        }
+        return HTTPSourceReader::Continue;
+      });
+  co_await reader.read();
+  const std::vector<std::pair<uint16_t, bool>> expectedHeads{
+      {100, false}, {102, false}, {103, false}, {200, true}};
+  EXPECT_EQ(heads, expectedHeads);
+  EXPECT_EQ(payload, "body");
+  EXPECT_EQ(terminalBodyEvents, 1);
+  session_->initiateDrain();
+}
+
+CO_TEST_P_X(H1UpstreamSessionTest, InformationalResponseThenReadError) {
+  auto responseSource = co_await co_awaitTry(
+      session_->sendRequest(HTTPFixedSource::makeFixedRequest("/")));
+  XCHECK(!responseSource.hasException());
+  transport_->addReadEvent(
+      folly::IOBuf::copyBuffer("HTTP/1.1 103 Early Hints\r\n\r\n"), false);
+
+  size_t heads = 0;
+  size_t errors = 0;
+  expectedError_ = TransportErrorCode::NETWORK_ERROR;
+  HTTPSourceReader reader(std::move(*responseSource));
+  reader
+      .onHeaders([&](std::unique_ptr<HTTPMessage> msg, bool final, bool eom) {
+        ++heads;
+        EXPECT_EQ(msg->getStatusCode(), 103);
+        EXPECT_FALSE(final);
+        EXPECT_FALSE(eom);
+        static_cast<TestUniplexTransport *>(transport_)
+            ->addReadError(TransportErrorCode::NETWORK_ERROR);
+        return HTTPSourceReader::Continue;
+      })
+      .onBody([](BufQueue, bool) {
+        ADD_FAILURE() << "Unexpected body callback without a final response";
+        return HTTPSourceReader::Continue;
+      })
+      .onError(
+          [&](HTTPSourceReader::ErrorContext context, const HTTPError &error) {
+            ++errors;
+            EXPECT_EQ(heads, 1);
+            EXPECT_EQ(context, HTTPSourceReader::ErrorContext::HEADERS);
+            EXPECT_EQ(error.code, HTTPErrorCode::TRANSPORT_READ_ERROR);
+          });
+  co_await reader.read();
+  EXPECT_EQ(heads, 1);
+  EXPECT_EQ(errors, 1);
+}
+
 CO_TEST_P_X(H1UpstreamSessionTest, ReceiveGoaway) {
   auto responseSource = co_await co_awaitTry(
       session_->sendRequest(HTTPFixedSource::makeFixedRequest("/")));
