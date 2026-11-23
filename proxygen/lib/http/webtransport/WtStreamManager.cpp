@@ -118,6 +118,7 @@ struct WtStreamManager::Accessor {
   auto& finOnlyStreams() {
     return sm_.finOnlyStreams_;
   }
+
   WtStreamManager& sm_;
 };
 
@@ -213,10 +214,12 @@ struct WriteHandle : public WebTransport::StreamWriteHandle {
   void cancel(folly::exception_wrapper ex) noexcept;
   void onStopSending(uint32_t errCode) noexcept;
   void finish(bool done) noexcept;
+  void maybeNotifyWriteReady() noexcept;
 
   Accessor smAccessor_;
   WtBufferedStreamData bufferedSendData_;
   uint64_t err{kInvalidVarint};
+  WtStreamManager::WriteCallback* wcb_{nullptr};
   WritePromise promise_{emptyWritePromise()};
   WriteHandleState state_;
   WtStreamManager::BidiHandle* bidi_{nullptr}; // ptr to the owning BidiHandle /
@@ -243,6 +246,21 @@ struct WtStreamManager::BidiHandleDeleter {
     if (p && --p->refs == 0) {
       delete p;
     }
+  }
+};
+
+/**
+ * NOTE: temporary solution to keep handles alive until we soon migrate all
+ * users to WtStreamManager and make KeepAlive handles mandatory and held by the
+ * application.
+ *
+ * Helper to keep the handles alive while executing something that may
+ * deallocate the handle inline.
+ */
+struct WtStreamManager::KeepAlive {
+  static BidiHandlePtr make(BidiHandle& h) noexcept {
+    h.refs++;
+    return BidiHandlePtr{&h};
   }
 };
 
@@ -655,6 +673,13 @@ void WtStreamManager::setReadCb(WtReadHandle& rh, ReadCallback* rcb) noexcept {
   readhandle_ref_cast(rh).rcb_ = rcb;
 }
 
+void WtStreamManager::setWriteCb(WtWriteHandle& wh,
+                                 WriteCallback* wcb) noexcept {
+  auto& handle = writehandle_ref_cast(wh);
+  handle.wcb_ = wcb;
+  handle.maybeNotifyWriteReady();
+}
+
 uint64_t WtStreamManager::recvBytesAvail(
     const WtReadHandle& rh) const noexcept {
   return std::min(
@@ -676,18 +701,11 @@ WtStreamManager::Result WtStreamManager::onMaxData(MaxConnData data) noexcept {
   // Re-add all connection-FC-blocked streams to the priority queue
   auto blockedStreams = std::move(connFcBlockedStreams_);
   for (auto* wh : blockedStreams) {
-    auto& writeHandle = writehandle_ref_cast(*wh);
-    if (writeHandle.bufferedSendData_.canSendData()) {
-      writableStreams_.insert(writeHandle.getID(), writeHandle.getPriority());
-    } else {
-      XLOG(ERR) << "Stream " << writeHandle.getID()
-                << " in connFcBlockedStreams_ but !canSendData";
+    if (writehandle_ref_cast(*wh).bufferedSendData_.canSendData()) {
+      onStreamWritable(*wh); // stream now writable; can delete this
     }
   }
 
-  if (hasEvent()) {
-    egressCb_.eventsAvailable();
-  }
   return Ok;
 }
 
@@ -748,7 +766,6 @@ auto WtStreamManager::getFlowControlInfo(const WtWriteHandle& wh) const noexcept
 }
 
 void WtStreamManager::onStreamWritable(WtWriteHandle& wh) noexcept {
-  // Don't re-insert if already tracked as conn FC blocked
   auto& writeHandle = writehandle_ref_cast(wh);
 
   if (connSendFc_.getAvailable() == 0 &&
@@ -757,10 +774,12 @@ void WtStreamManager::onStreamWritable(WtWriteHandle& wh) noexcept {
     return;
   }
 
+  auto ka = KeepAlive::make(*writeHandle.bidi_);
   writableStreams_.insert(writeHandle.getID(), writeHandle.getPriority());
   if (hasEvent()) {
     egressCb_.eventsAvailable();
   }
+  writeHandle.maybeNotifyWriteReady();
 }
 
 void WtStreamManager::drain() noexcept {
@@ -1056,7 +1075,7 @@ WriteHandle::writeStreamData(std::unique_ptr<folly::IOBuf> data,
     if (bufferedSendData_.onlyFinPending()) {
       smAccessor_.finOnlyStreams().insert(this);
     }
-    smAccessor_.onStreamWritable(*this); // stream is now writable
+    smAccessor_.onStreamWritable(*this); // stream now writable; may delete this
   }
   return streamBlocked ? FcState::BLOCKED : FcState::UNBLOCKED;
 }
@@ -1088,7 +1107,7 @@ Result WriteHandle::onMaxData(uint64_t offset) {
     return Result::Fail;
   }
   if (bufferedSendData_.canSendData()) {
-    smAccessor_.onStreamWritable(*this); // stream is now writable
+    smAccessor_.onStreamWritable(*this); // stream now writable; can delete this
   }
   return Result::Ok;
 }
@@ -1176,9 +1195,28 @@ void WriteHandle::onStopSending(uint32_t errCode) noexcept {
 void WriteHandle::finish(bool done) noexcept {
   if (done) {
     state_ = WriteHandleState::Closed;
+    wcb_ = nullptr;
     smAccessor_.finOnlyStreams().erase(this);
     smAccessor_.connFcBlockedStreams().erase(this);
     smAccessor_.writableStreams().erase(id_);
     smAccessor_.done(*this);
+  }
+}
+
+/**
+ * WriteCallback is only set in the "write bypass mode". We notify the callback
+ * iff set and there's pending data w/ available conn- & stream- flow control.
+ * The backing transport can uninstall the callback to simulate backpressure.
+ *
+ * NOTE: maybeNotifyWriteReady can trigger WriteHandle to be freed. The
+ * transport will likely invoke ::dequeue(WriteHandle&) inline from
+ * WriteCallback.
+ */
+void WriteHandle::maybeNotifyWriteReady() noexcept {
+  // fake one extra byte of egress conn fc if fin only
+  const uint64_t connAvail = smAccessor_.connSend().getAvailable() +
+                             bufferedSendData_.onlyFinPending();
+  if (wcb_ && bufferedSendData_.canSendData() && connAvail > 0) {
+    wcb_->writeReady(*this);
   }
 }

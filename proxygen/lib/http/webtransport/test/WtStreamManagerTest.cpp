@@ -1174,6 +1174,15 @@ struct WtReadCallback : WtStreamManager::ReadCallback {
   bool signalled = false;
 };
 
+struct WtWriteCallback : WtStreamManager::WriteCallback {
+  ~WtWriteCallback() override = default;
+  void writeReady(WtWriteHandle&) noexcept override {
+    signalled = true;
+  }
+
+  bool signalled = false;
+};
+
 struct MockDeliveryCallback : WebTransport::ByteEventCallback {
   MOCK_METHOD(void, onByteEvent, (uint64_t, uint64_t), (noexcept, override));
   MOCK_METHOD(void,
@@ -1508,6 +1517,43 @@ TEST_F(WtStreamManagerTest, EventsAvailableNotifiedOnNonEmptyWritableStream) {
   // writableStreams is non-empty)
   EXPECT_TRUE(streamManager->onMaxData(MaxConnData{11}));
   EXPECT_TRUE(egressCb.evAvail_);
+}
+
+TEST_F(WtStreamManagerTest, WriteCallback) {
+  config = {.peerMaxConnData = 1, .peerMaxStreamDataUni = 1};
+  reinit(config);
+  auto* wh = CHECK_NOTNULL(streamManager->createEgressHandle());
+  EXPECT_TRUE(wh->writeStreamData(makeBuf(1),
+                                  /*fin=*/false,
+                                  nullptr)
+                  .hasValue());
+
+  // conn- & stream-level fc available => signal
+  WtWriteCallback writeCb;
+  streamManager->setWriteCb(*wh, &writeCb);
+  EXPECT_TRUE(std::exchange(writeCb.signalled, false));
+
+  { // dequeue to saturate conn- & stream-level fc
+    auto data = streamManager->dequeue(*wh, 1);
+    ASSERT_NE(data.data, nullptr);
+    EXPECT_EQ(data.data->computeChainDataLength(), 1);
+    EXPECT_FALSE(data.fin);
+  }
+
+  // additional 1 byte enqueued
+  EXPECT_TRUE(wh->writeStreamData(makeBuf(1),
+                                  /*fin=*/false,
+                                  nullptr)
+                  .hasValue());
+  EXPECT_FALSE(writeCb.signalled);
+
+  // advertise additional conn fc (still lacking stream fc) => no signal
+  EXPECT_TRUE(streamManager->onMaxData(MaxConnData{2}));
+  EXPECT_FALSE(writeCb.signalled);
+
+  // additional stream fc => signalled
+  EXPECT_TRUE(streamManager->onMaxData(MaxStreamData{{2}, wh->getID()}));
+  EXPECT_TRUE(writeCb.signalled);
 }
 
 } // namespace proxygen::coro::test
