@@ -81,7 +81,7 @@ constexpr uint64_t kMaxVarint = (1ull << 62) - 1;
 
 struct WtStreamManager {
   /**
-   * This edge-triggered callback (::eventsAvailable) is invoked once control
+   * This level-triggered callback (::eventsAvailable) is invoked once control
    * events are available to be dequeued by the backing transport – (e.g.
    * connection- and stream-level flow control, reset_stream, stop_sending,
    * etc.)

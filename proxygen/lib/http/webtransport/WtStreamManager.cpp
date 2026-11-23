@@ -485,15 +485,12 @@ bool WtStreamManager::isEgress(uint64_t streamId) const noexcept {
 }
 
 /**
- * Enqueues an event into events. If this is the first event to be enqueued,
- * it will invoke the Callback (edge-triggered).
+ * Enqueues an event into events. This will invoke the Callback unconditionally
+ * as there's a newly available event (level-triggered).
  */
 void WtStreamManager::enqueueEvent(Event&& ev) noexcept {
-  bool wasEmpty = !hasEvent();
   ctrlEvents_.push_back(std::move(ev));
-  if (wasEmpty && hasEvent()) {
-    egressCb_.eventsAvailable();
-  }
+  egressCb_.eventsAvailable();
 }
 
 WtStreamManager::Result WtStreamManager::onMaxStreams(MaxStreamsBidi bidi) {
@@ -676,7 +673,6 @@ WtStreamManager::Result WtStreamManager::onMaxData(MaxConnData data) noexcept {
     return Fail;
   }
 
-  const bool wasEmpty = !hasEvent();
   // Re-add all connection-FC-blocked streams to the priority queue
   auto blockedStreams = std::move(connFcBlockedStreams_);
   for (auto* wh : blockedStreams) {
@@ -689,7 +685,7 @@ WtStreamManager::Result WtStreamManager::onMaxData(MaxConnData data) noexcept {
     }
   }
 
-  if (wasEmpty && hasEvent()) {
+  if (hasEvent()) {
     egressCb_.eventsAvailable();
   }
   return Ok;
@@ -761,9 +757,8 @@ void WtStreamManager::onStreamWritable(WtWriteHandle& wh) noexcept {
     return;
   }
 
-  const bool wasEmpty = !hasEvent();
   writableStreams_.insert(writeHandle.getID(), writeHandle.getPriority());
-  if (wasEmpty && hasEvent()) {
+  if (hasEvent()) {
     egressCb_.eventsAvailable();
   }
 }

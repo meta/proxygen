@@ -1464,9 +1464,50 @@ TEST_F(WtStreamManagerTest, H02FinishedHandleRemainsConnFcBlocked) {
   EXPECT_TRUE(fin.fin);
   EXPECT_FALSE(streamManager->hasStreams());
 
-  // Before the fix, the FIN deleted writeHandle without removing its raw
-  // address from connFcBlockedStreams_. MAX_DATA then dereferenced it.
   EXPECT_TRUE(streamManager->onMaxData(MaxConnData{WtConfig::kDefaultFc + 1}));
+}
+
+/**
+ * This test verifies that ::eventsAvailable is invoked even when the state of
+ * WtStreamManager previously had a writable stream. `::eventsAvailable` is
+ * level-triggered and no longer edge-triggered.
+ */
+TEST_F(WtStreamManagerTest, EventsAvailableNotifiedOnNonEmptyWritableStream) {
+  // can send at most ten bytes on connection
+  config = {
+      .peerMaxStreamsUni = 2,
+      .peerMaxConnData = 10,
+  };
+  reinit(config);
+
+  // write MaxConnData bytes into each egress handle
+  auto* wh1 = CHECK_NOTNULL(streamManager->createEgressHandle());
+  auto* wh2 = CHECK_NOTNULL(streamManager->createEgressHandle());
+  wh1->writeStreamData(makeBuf(10), /*fin=*/false, nullptr);
+  wh2->writeStreamData(makeBuf(10), /*fin=*/false, nullptr);
+
+  // eventsAvailable notified
+  EXPECT_TRUE(std::exchange(egressCb.evAvail_, false));
+
+  /**
+   * Dequeue 10 bytes from wh1 will saturate window, moving only wh1 from
+   * writableStreams into connFcBlockedStreams. This is done lazily per-stream
+   * upon dequeue.
+   */
+  auto data = streamManager->dequeue(*wh1, 10);
+  ASSERT_NE(data.data, nullptr);
+  EXPECT_EQ(data.data->computeChainDataLength(), 10);
+  EXPECT_FALSE(data.fin);
+
+  // Dequeue 10 bytes from wh2 will no-op (return data=nullptr, fin=false)
+  data = streamManager->dequeue(*wh2, 10);
+  ASSERT_EQ(data.data, nullptr);
+  EXPECT_FALSE(data.fin);
+
+  // onMaxData should trigger ::eventsAvailable callback (even tho
+  // writableStreams is non-empty)
+  EXPECT_TRUE(streamManager->onMaxData(MaxConnData{11}));
+  EXPECT_TRUE(egressCb.evAvail_);
 }
 
 } // namespace proxygen::coro::test
