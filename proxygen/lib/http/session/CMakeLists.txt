@@ -259,6 +259,7 @@ proxygen_add_library(proxygen_http_session_hq_session
     mvfst::mvfst_priority_priority_queue
     Folly::folly_container_evicting_cache_map
     Folly::folly_container_f14_hash
+    Folly::folly_futures_core
     Folly::folly_io_async_async_base
     Folly::folly_io_async_async_socket
     Folly::folly_io_async_delayed_destruction

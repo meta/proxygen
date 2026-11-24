@@ -10,6 +10,7 @@
 
 #include <folly/container/EvictingCacheMap.h>
 #include <folly/container/F14Map.h>
+#include <folly/futures/Promise.h>
 #include <folly/io/IOBufQueue.h>
 #include <folly/io/async/AsyncSocket.h>
 #include <folly/io/async/DelayedDestructionBase.h>
@@ -1823,6 +1824,9 @@ class HQSession
     bool canCreateUniStream() override;
     bool canCreateBidiStream() override;
 
+    folly::SemiFuture<folly::Unit> awaitUniStreamCredit() override;
+    folly::SemiFuture<folly::Unit> awaitBidiStreamCredit() override;
+
     folly::Expected<WebTransport::FCState, WebTransport::ErrorCode>
     sendWebTransportStreamData(
         HTTPCodec::StreamID /*id*/,
@@ -1990,6 +1994,9 @@ class HQSession
   };
   HTTPSettings ingressSettings_;
   uint64_t wtInitialSendWindow_{quic::kMaxVarInt};
+  // WebTransportImpl sessions waiting for QUIC stream credit
+  std::vector<folly::Promise<folly::Unit>> wtUniCreditWaiters_;
+  std::vector<folly::Promise<folly::Unit>> wtBidiCreditWaiters_;
   // Maximum Stream/Push ID that we are allowed to open, from GOAWAY
   quic::StreamId peerMinUnseenId_{hq::kMaxClientBidiStreamId};
   uint64_t minUnseenIncomingPushId_{0};

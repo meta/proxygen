@@ -2342,6 +2342,51 @@ TEST_P(HQUpstreamSessionTestWebTransport, MaxStreamsUniCapsule) {
   closeWTSession();
 }
 
+// A session that used up the server's QUIC stream credit waits for more.
+TEST_P(HQUpstreamSessionTestWebTransport, AwaitQuicStreamCredit) {
+  socketDriver_->setMaxBidiStreams(1);
+  auto sock = socketDriver_->getSocket();
+  while (sock->getNumOpenableUnidirectionalStreams() > 0) {
+    ASSERT_TRUE(wt_->createUniStream().hasValue());
+  }
+  auto uniCredit = wt_->awaitUniStreamCredit();
+  auto bidiCredit = wt_->awaitBidiStreamCredit();
+  EXPECT_FALSE(uniCredit.isReady());
+  EXPECT_FALSE(bidiCredit.isReady());
+
+  socketDriver_->setMaxUniStreams(100);
+  socketDriver_->setMaxBidiStreams(100);
+  EXPECT_TRUE(uniCredit.isReady());
+  EXPECT_TRUE(bidiCredit.isReady());
+  EXPECT_TRUE(wt_->createUniStream().hasValue());
+  EXPECT_TRUE(wt_->createBidiStream().hasValue());
+
+  closeWTSession();
+}
+
+// The filter doesn't count H3 streams against WT_MAX_STREAMS, so only a limit
+// of 0 blocks here.
+TEST_P(HQUpstreamSessionTestWebTransport, AwaitWtMaxStreams) {
+  socketDriver_->setMaxUniStreams(10);
+  folly::IOBufQueue capsuleQueue;
+  writeWTMaxStreams(
+      capsuleQueue, WTMaxStreamsCapsule{.maximumStreams = 0}, false);
+  sendPartialBody(sessionId_, capsuleQueue.move(), false);
+  flushAndLoopN(2);
+  EXPECT_TRUE(wt_->createUniStream().hasError());
+  auto uniCredit = wt_->awaitUniStreamCredit();
+  EXPECT_FALSE(uniCredit.isReady());
+
+  writeWTMaxStreams(
+      capsuleQueue, WTMaxStreamsCapsule{.maximumStreams = 1}, false);
+  sendPartialBody(sessionId_, capsuleQueue.move(), false);
+  flushAndLoopN(2);
+  EXPECT_TRUE(uniCredit.isReady());
+  EXPECT_TRUE(wt_->createUniStream().hasValue());
+
+  closeWTSession();
+}
+
 TEST_P(HQUpstreamSessionTestWebTransport, SessionFlowControl) {
   InSequence enforceOrder;
 

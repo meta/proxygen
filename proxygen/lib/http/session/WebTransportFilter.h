@@ -293,11 +293,27 @@ class WebTransportFilter
   }
 
   folly::SemiFuture<folly::Unit> awaitUniStreamCredit() override {
-    return folly::makeFuture(folly::unit);
+    if ((nextNewWTUniStream_ >> 2) >= maxWTUniStreams_) {
+      auto [promise, future] = folly::makePromiseContract<folly::Unit>();
+      uniCreditWaiters_.push_back(std::move(promise));
+      return std::move(future);
+    }
+    if (h3Tp_) {
+      return h3Tp_->awaitUniStreamCredit();
+    }
+    return folly::makeSemiFuture();
   }
 
   folly::SemiFuture<folly::Unit> awaitBidiStreamCredit() override {
-    return folly::makeSemiFuture(folly::unit);
+    if ((nextNewWTBidiStream_ >> 2) >= maxWTBidiStreams_) {
+      auto [promise, future] = folly::makePromiseContract<folly::Unit>();
+      bidiCreditWaiters_.push_back(std::move(promise));
+      return std::move(future);
+    }
+    if (h3Tp_) {
+      return h3Tp_->awaitBidiStreamCredit();
+    }
+    return folly::makeSemiFuture();
   }
 
   bool canCreateUniStream() override {
@@ -378,6 +394,9 @@ class WebTransportFilter
   void onMaxStreamsBidi(WTMaxStreamsCapsule capsule) noexcept override {
     XLOG(DBG1) << __func__;
     maxWTBidiStreams_ = capsule.maximumStreams;
+    for (auto& waiter : std::exchange(bidiCreditWaiters_, {})) {
+      waiter.setValue();
+    }
     if (wtImpl_) {
       wtImpl_->onMaxStreams(capsule.maximumStreams, true);
     }
@@ -385,6 +404,9 @@ class WebTransportFilter
   void onMaxStreamsUni(WTMaxStreamsCapsule capsule) noexcept override {
     XLOG(DBG1) << __func__;
     maxWTUniStreams_ = capsule.maximumStreams;
+    for (auto& waiter : std::exchange(uniCreditWaiters_, {})) {
+      waiter.setValue();
+    }
     if (wtImpl_) {
       wtImpl_->onMaxStreams(capsule.maximumStreams, false);
     }
@@ -449,6 +471,8 @@ class WebTransportFilter
   uint64_t nextNewWTUniStream_{2};
   uint64_t maxWTBidiStreams_{quic::kMaxVarInt};
   uint64_t maxWTUniStreams_{quic::kMaxVarInt};
+  std::vector<folly::Promise<folly::Unit>> uniCreditWaiters_;
+  std::vector<folly::Promise<folly::Unit>> bidiCreditWaiters_;
   folly::F14FastMap<HTTPCodec::StreamID, WebTransportImpl::StreamReadHandle*>
       readCallbacks_;
   struct WriteCallback {

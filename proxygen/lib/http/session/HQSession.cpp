@@ -274,6 +274,10 @@ void HQSession::onWtStreamCredit(bool bidi) noexcept {
       wtSess->onQuicUniStreamCredit();
     }
   }
+  for (auto& waiter :
+       std::exchange(bidi ? wtBidiCreditWaiters_ : wtUniCreditWaiters_, {})) {
+    waiter.setValue();
+  }
 }
 
 void HQSession::onNewUnidirectionalStream(quic::StreamId id) noexcept {
@@ -3794,6 +3798,26 @@ bool HQSession::HQStreamTransport::canCreateUniStream() {
 
 bool HQSession::HQStreamTransport::canCreateBidiStream() {
   return session_.sock_->getNumOpenableBidirectionalStreams() > 0;
+}
+
+folly::SemiFuture<folly::Unit>
+HQSession::HQStreamTransport::awaitUniStreamCredit() {
+  if (canCreateUniStream()) {
+    return folly::makeSemiFuture();
+  }
+  auto [promise, future] = folly::makePromiseContract<folly::Unit>();
+  session_.wtUniCreditWaiters_.push_back(std::move(promise));
+  return std::move(future);
+}
+
+folly::SemiFuture<folly::Unit>
+HQSession::HQStreamTransport::awaitBidiStreamCredit() {
+  if (canCreateBidiStream()) {
+    return folly::makeSemiFuture();
+  }
+  auto [promise, future] = folly::makePromiseContract<folly::Unit>();
+  session_.wtBidiCreditWaiters_.push_back(std::move(promise));
+  return std::move(future);
 }
 
 folly::Expected<WebTransport::FCState, WebTransport::ErrorCode>

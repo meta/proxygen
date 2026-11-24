@@ -5087,6 +5087,51 @@ TEST_P(HQDownstreamSessionTestWebTransport, StopSendingFromOnNewUniStream) {
   flushRequestsAndLoop();
 }
 
+// A session that used up the client's QUIC stream credit waits for more.
+TEST_P(HQDownstreamSessionTestWebTransport, AwaitQuicStreamCredit) {
+  HTTPMessage req;
+  req.setHTTPVersion(1, 1);
+  req.setUpgradeProtocol("webtransport");
+  req.setMethod(HTTPMethod::CONNECT);
+  req.setURL("/webtransport");
+  req.getHeaders().set(HTTP_HEADER_HOST, "www.facebook.com");
+  sendRequest(req, /*eom=*/false);
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders();
+  flushRequestsAndLoopN(3);
+
+  HTTPMessage resp;
+  resp.setStatusCode(200);
+  handler->txn_->sendHeaders(resp);
+  auto* wt = handler->txn_->getWebTransport();
+  ASSERT_NE(wt, nullptr);
+
+  socketDriver_->setMaxBidiStreams(1);
+  auto sock = socketDriver_->getSocket();
+  while (sock->getNumOpenableUnidirectionalStreams() > 0) {
+    ASSERT_TRUE(wt->createUniStream().hasValue());
+  }
+  while (sock->getNumOpenableBidirectionalStreams() > 0) {
+    ASSERT_TRUE(wt->createBidiStream().hasValue());
+  }
+  auto uniCredit = wt->awaitUniStreamCredit();
+  auto bidiCredit = wt->awaitBidiStreamCredit();
+  EXPECT_FALSE(uniCredit.isReady());
+  EXPECT_FALSE(bidiCredit.isReady());
+
+  socketDriver_->setMaxUniStreams(100);
+  socketDriver_->setMaxBidiStreams(100);
+  EXPECT_TRUE(uniCredit.isReady());
+  EXPECT_TRUE(bidiCredit.isReady());
+  EXPECT_TRUE(wt->createUniStream().hasValue());
+  EXPECT_TRUE(wt->createBidiStream().hasValue());
+
+  handler->expectDetachTransaction();
+  wt->closeSession(folly::none);
+  hqSession_->closeWhenIdle();
+  flushRequestsAndLoop();
+}
+
 INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
                          HQDownstreamSessionTestWebTransport,
                          Values([] {
