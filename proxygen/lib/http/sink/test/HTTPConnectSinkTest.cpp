@@ -8,7 +8,7 @@
 
 #include <folly/SocketAddress.h>
 #include <folly/io/async/EventBaseManager.h>
-#include <folly/io/async/test/MockAsyncTransport.h>
+#include <folly/io/async/testing/MockAsyncTransport.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/facebook/lib/http/sink/HTTPConnectSink.h>
 

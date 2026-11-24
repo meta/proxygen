@@ -10,9 +10,9 @@
 
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/EventUtil.h>
-#include <folly/io/async/test/MockTimeoutManager.h>
 #include <folly/io/async/test/UndelayedDestruction.h>
 #include <folly/io/async/test/Util.h>
+#include <folly/io/async/testing/MockTimeoutManager.h>
 #include <folly/portability/GTest.h>
 #include <map>
 #include <vector>
