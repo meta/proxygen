@@ -14,6 +14,7 @@
 #include <folly/SocketAddress.h>
 #include <folly/futures/Future.h>
 #include <folly/io/IOBuf.h>
+#include <proxygen/lib/http/HTTP3ErrorCode.h>
 #include <quic/api/QuicCallbacks.h>
 #include <quic/api/TransportInfo.h>
 #include <quic/priority/PriorityQueue.h>
@@ -52,8 +53,9 @@ class WebTransport {
 
   static constexpr uint64_t kFirstErrorCode = 0x52e4a40fa8db;
   static constexpr uint64_t kLastErrorCode = 0x52e5ac983162;
-  static constexpr uint32_t kSessionGone = 0x170d7b68;
-  static constexpr uint32_t kBufferedStreamRejected = 0x3994bd84;
+  static constexpr uint32_t kSessionGone = HTTP3::ErrorCode::WT_SESSION_GONE;
+  static constexpr uint32_t kBufferedStreamRejected =
+      HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED;
   static constexpr uint32_t kInternalError =
       std::numeric_limits<uint32_t>::max();
 

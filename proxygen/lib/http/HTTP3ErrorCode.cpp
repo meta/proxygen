@@ -53,6 +53,12 @@ std::string toString(HTTP3::ErrorCode code) {
       return "HTTP: Error on QPACK encoder stream";
     case HTTP3::ErrorCode::HTTP_QPACK_DECODER_STREAM_ERROR:
       return "HTTP: Error on QPACK decoder stream";
+    case HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED:
+      return "WebTransport: Buffered stream rejected";
+    case HTTP3::ErrorCode::WT_SESSION_GONE:
+      return "WebTransport: Session gone";
+    case HTTP3::ErrorCode::WT_FLOW_CONTROL_ERROR:
+      return "WebTransport: Flow control error";
     case HTTP3::ErrorCode::GIVEUP_ZERO_RTT:
       return "Give up Zero RTT";
   }
@@ -84,6 +90,9 @@ std::vector<HTTP3::ErrorCode> getAllHTTP3ErrorCodes() {
       HTTP3::ErrorCode::HTTP_QPACK_DECOMPRESSION_FAILED,
       HTTP3::ErrorCode::HTTP_QPACK_ENCODER_STREAM_ERROR,
       HTTP3::ErrorCode::HTTP_QPACK_DECODER_STREAM_ERROR,
+      HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED,
+      HTTP3::ErrorCode::WT_SESSION_GONE,
+      HTTP3::ErrorCode::WT_FLOW_CONTROL_ERROR,
       HTTP3::ErrorCode::GIVEUP_ZERO_RTT,
   };
   return all;

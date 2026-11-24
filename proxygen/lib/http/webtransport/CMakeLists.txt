@@ -10,6 +10,7 @@ proxygen_add_library(proxygen_http_webtransport
   SRCS
     WebTransport.cpp
   EXPORTED_DEPS
+    proxygen_http_h3_errors
     mvfst::mvfst_api_quic_callbacks
     mvfst::mvfst_api_transport_info
     mvfst::mvfst_priority_priority_queue
