@@ -86,7 +86,6 @@ void grantMaxData(const QuicSocket& sock,
   }
   // no-op if the peer rwnd max offset hasn't increased
   sm.onMaxData(MaxStreamData{{.maxData = fc->sendWindowMaxOffset}, id});
-  return;
 }
 
 struct QuicWtEventVisitor {
@@ -216,6 +215,7 @@ auto QuicWtSessionBase::createWtEgressHandle(StreamId id) noexcept
   XCHECK(success);
   grantMaxData(*quicSocket_, sm_, *res.writeHandle);
   quicSocket_->setStopSendingCallback(id, &stopSendingCb_);
+  sm_.setWriteCb(*res.writeHandle, &smCb_);
   if (bidi) {
     sm_.setReadCb(*res.readHandle, &smCb_);
     installReadCallback(id);
@@ -337,10 +337,10 @@ QuicWtSessionBase::closeSession(folly::Optional<uint32_t> error) noexcept {
 }
 
 void QuicWtSessionBase::onDatagrams(std::vector<IoBufPtr> dgrams) noexcept {
-  noteSessionActivity();
   if (wtHandler_) {
     wtHandler_->onDatagrams(std::move(dgrams));
   }
+  noteSessionActivity();
 }
 
 void QuicWtSessionBase::onDatagram(IoBufPtr dgram) noexcept {
@@ -371,7 +371,6 @@ void QuicWtSessionBase::QuicReadCallback::readAvailable(StreamId id) noexcept {
     return;
   }
   auto& [data, eof] = readRes.value();
-  sess.noteSessionActivity();
   if (eof) {
     quicSocket->setReadCallback(id, nullptr, std::nullopt);
   }
@@ -381,15 +380,16 @@ void QuicWtSessionBase::QuicReadCallback::readAvailable(StreamId id) noexcept {
   if (!eof) { // ::enqueue w/ eof=true may deallocate rh
     sess.maybePauseIngress(*rh);
   }
+  sess.noteSessionActivity();
 }
 
 void QuicWtSessionBase::QuicReadCallback::readError(StreamId id,
                                                     QuicError error) noexcept {
   XLOG(DBG4) << __func__ << "; id=" << id << "; err=" << error;
-  sess.noteSessionActivity();
   sess.sm_.onResetStream(WtStreamManager::ResetStream{
       .streamId = id,
       .err = sess.fromTransportErrorCode(getQuicAppErrCode(error))});
+  sess.noteSessionActivity();
 }
 
 void QuicWtSessionBase::QuicStopSendingCallback::onStopSending(
@@ -411,9 +411,58 @@ void QuicWtSessionBase::StreamManagerCallback::readReady(
   sess.maybeResumeIngress(rh);
 }
 
+void QuicWtSessionBase::StreamManagerCallback::writeReady(
+    WtStreamManager::WtWriteHandle& wh) noexcept {
+  if (std::exchange(inWriteReady_, true)) {
+    // already in progress; ::grantMaxData can trigger ::writeReady to re-enter
+    return;
+  }
+  auto g = folly::makeGuard([&] { inWriteReady_ = false; });
+
+  /**
+   * Dequeue will be capped by the quic conn/stream flow control. This will
+   * either dequeue all the buffered data, or saturate the conn/stream flow
+   * control -- in either case the stream will be removed from the
+   * PriorityQueue by WtStreamManager
+   */
+  const auto id = wh.getID();
+  bool done = false;
+  while (!done) {
+    // dequeue as much data as possible (limited by underlying quic
+    // stream/conn-fc)
+    auto streamData = sess.sm_.dequeue(wh, kMaxVarint);
+    if (!streamData.data && !streamData.fin) { // blocked on fc
+      break;
+    }
+    auto& sock = sess.quicSocket_;
+    auto res = sock->writeChain(id,
+                                std::move(streamData.data),
+                                streamData.fin,
+                                streamData.deliveryCallback);
+    done = res.hasError() || streamData.fin;
+    XLOG_IF(ERR, res.hasError())
+        << "::writeChain err= " << res.error() << "; id=" << id;
+
+    if (streamData.fin) {
+      sock->setStopSendingCallback(id, nullptr);
+    } else if (isWtStreamEgressFcBlocked(sess.sm_, wh)) {
+      // The cached window may lag the peer's MAX_STREAM_DATA; refreshing it
+      // here saves a loop iteration through notifyPendingWriteOnStream.
+      grantMaxData(*sock, sess.sm_, wh);
+      if (isWtStreamEgressFcBlocked(sess.sm_, wh)) {
+        sock->notifyPendingWriteOnStream(id, &sess);
+        sess.sm_.setWriteCb(wh, nullptr);
+        break;
+      }
+    }
+  }
+  sess.noteSessionActivity();
+}
+
 // no callbacks from ::eventsAvailable is expected to destruct the session
 void QuicWtSessionBase::StreamManagerCallback::eventsAvailable() noexcept {
-  if (eventsAvailable_++ > 0) { // active ::eventsAvailable already in progress
+  if (eventsAvailable_++ > 0) { // active ::eventsAvailable already in
+                                // progress
     return;
   }
   do { // drain all events; in practice not expected to loop more than 1-2 times
@@ -427,46 +476,10 @@ void QuicWtSessionBase::StreamManagerCallback::eventsAvailableImpl() noexcept {
   // process control events first
   QuicWtEventVisitor visitor{*sock, sess.observer_, sess};
   auto events = sess.sm_.moveEvents();
-  bool active = !events.empty();
   for (auto& event : events) {
     std::visit(visitor, std::move(event));
   }
-
-  // then process writable streams
-  auto& pq = *sess.priorityQueue_;
-  while (!pq.empty()) {
-    active = true;
-    const auto id = pq.getNextScheduledID(std::nullopt);
-    XCHECK(id.isStreamID());
-    const auto streamId = id.asStreamID();
-    auto* wh = CHECK_NOTNULL(sess.sm_.getBidiHandle(streamId).writeHandle);
-    /**
-     * Dequeue will be capped by the quic conn/stream flow control. This will
-     * either dequeue all the buffered data, or saturate the conn/stream flow
-     * control -- in either case the stream will be removed from the
-     * PriorityQueue by WtStreamManager
-     */
-    auto streamData = sess.sm_.dequeue(*wh, kMaxVarint);
-    XCHECK(streamData.data || streamData.fin);
-    auto res = sock->writeChain(streamId,
-                                std::move(streamData.data),
-                                streamData.fin,
-                                streamData.deliveryCallback);
-    XLOG_IF(ERR, res.hasError())
-        << "::writeChain err= " << res.error() << "; id=" << streamId;
-
-    if (streamData.fin) {
-      sock->setStopSendingCallback(streamId, nullptr);
-    } else if (isWtStreamEgressFcBlocked(sess.sm_, *wh)) {
-      // The cached window may lag the peer's MAX_STREAM_DATA; refreshing it
-      // here saves a loop iteration through notifyPendingWriteOnStream.
-      grantMaxData(*sock, sess.sm_, *wh);
-      if (isWtStreamEgressFcBlocked(sess.sm_, *wh)) {
-        sess.quicSocket_->notifyPendingWriteOnStream(streamId, &sess);
-      }
-    }
-  }
-  if (active) {
+  if (!events.empty()) {
     sess.noteSessionActivity();
   }
 }
@@ -481,6 +494,7 @@ void QuicWtSessionBase::onStreamWriteReady(quic::StreamId streamId,
   XCHECK(quicSocket_);
   if (auto* wh = sm_.getBidiHandle(streamId).writeHandle) {
     grantMaxData(*quicSocket_, sm_, *wh);
+    sm_.setWriteCb(*wh, &smCb_);
   }
 }
 
@@ -520,16 +534,17 @@ bool QuicWtSessionBase::acquireIngressStream(uint64_t id) noexcept {
   const bool bidi = success && handle.writeHandle;
   XLOG(DBG6) << __func__ << "; id=" << id << "; ok=" << success;
   if (success) {
-    noteSessionActivity();
     sm_.setReadCb(*handle.readHandle, &smCb_);
     installReadCallback(id);
     if (bidi) {
       quicSocket_->setStopSendingCallback(id, &stopSendingCb_);
       grantMaxData(*quicSocket_, sm_, *handle.writeHandle);
+      sm_.setWriteCb(*handle.writeHandle, &smCb_);
       wtHandler_->onNewBidiStream(handle);
     } else {
       wtHandler_->onNewUniStream(handle.readHandle);
     }
+    noteSessionActivity();
   }
   return success;
 }
@@ -537,9 +552,9 @@ bool QuicWtSessionBase::acquireIngressStream(uint64_t id) noexcept {
 /**
  * QuicWtSession implementation below. Most of the functionality is shared with
  * QuicWtSessionBase - however this derived class assumes ownership of all of
- * QuicSocket's streams, so it owns and installs a
- * QuicConnectionCallback. Similarly the destructor/::closeSession closes all
- * streams on the underlying QuicSocket via QuicSocket::close.
+ * QuicSocket's streams, so it owns and installs a QuicConnectionCallback.
+ * Similarly the destructor/::closeSession closes all streams on the underlying
+ * QuicSocket via QuicSocket::close.
  */
 QuicWtSession::QuicWtSession(std::shared_ptr<quic::QuicSocket> quicSocket,
                              std::unique_ptr<WebTransportHandler> wtHandler)
