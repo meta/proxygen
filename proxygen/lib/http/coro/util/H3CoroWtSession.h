@@ -40,10 +40,12 @@ class H3CoroWtSession {
                   uint64_t connectStreamId);
 
   // launches the CONNECT stream read & write loops, which keep `self` alive for
-  // the lifetime of the session, and notifies the WebTransportHandler
+  // the lifetime of the session, and notifies the WebTransportHandler.
+  // WebTransport activity restarts ingressSource's readTimeout.
   std::shared_ptr<WebTransport> start(Ptr self,
                                       HTTPSourceHolder ingressSource,
-                                      EgressSourcePtr egressSource);
+                                      EgressSourcePtr egressSource,
+                                      std::chrono::milliseconds readTimeout);
 
   // for the backing http/3 session to deliver peer streams and quic datagrams
   proxygen::H3WtSession& wtSession() noexcept {
@@ -60,10 +62,18 @@ class H3CoroWtSession {
   struct H3ConnectStreamCb : proxygen::H3ConnectStreamCallback {
     using proxygen::H3ConnectStreamCallback::H3ConnectStreamCallback;
     CancellableBaton waitForEvent;
+    // set while the read loop runs
+    HTTPSourceHolder* ingress{nullptr};
+    std::chrono::milliseconds readTimeout{0};
     void onEvent(
         proxygen::detail::WtStreamManager::Event&& ev) noexcept override {
       proxygen::H3ConnectStreamCallback::onEvent(std::move(ev));
       waitForEvent.signal();
+    }
+    void onSessionActivity() noexcept override {
+      if (ingress && ingress->readable()) {
+        ingress->setReadTimeout(readTimeout);
+      }
     }
   };
 

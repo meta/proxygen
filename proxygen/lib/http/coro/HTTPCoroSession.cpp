@@ -4217,7 +4217,10 @@ std::shared_ptr<WebTransport> HTTPQuicCoroSession::createWebTransport(
                                             wtConfig,
                                             connectStreamId);
   stream->wtSession = h3Wt;
-  auto wt = h3Wt->start(h3Wt, std::move(ingressSource), std::move(egress));
+  auto wt = h3Wt->start(h3Wt,
+                        std::move(ingressSource),
+                        std::move(egress),
+                        stream->streamSource.getReadTimeout());
   drainPendingWtStreams(connectStreamId, /*deliver=*/true);
   drainBufferedDatagrams(connectStreamId);
   return wt;

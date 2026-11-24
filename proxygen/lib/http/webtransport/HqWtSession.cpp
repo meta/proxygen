@@ -59,7 +59,7 @@ struct WtWriteLooper
  private:
   // invoked when we need to egress an event on the underlying CONNECT stream
   void onEvent(detail::WtStreamManager::Event&&) noexcept override;
-  void onStreamActivity() noexcept override;
+  void onSessionActivity() noexcept override;
   void runLoopCallback() noexcept override;
 
   WebTransportTxnHandler& wtTxnHandler_;
@@ -72,7 +72,7 @@ void WtWriteLooper::onEvent(detail::WtStreamManager::Event&& event) noexcept {
   schedule();
 }
 
-void WtWriteLooper::onStreamActivity() noexcept {
+void WtWriteLooper::onSessionActivity() noexcept {
   if (auto* txn = wtTxnHandler_.txn_) {
     txn->refreshTimeout();
   }

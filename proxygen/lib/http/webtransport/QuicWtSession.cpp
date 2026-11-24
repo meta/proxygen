@@ -231,9 +231,9 @@ void QuicWtSessionBase::installReadCallback(StreamId id) noexcept {
   }
 }
 
-void QuicWtSessionBase::noteStreamActivity() noexcept {
+void QuicWtSessionBase::noteSessionActivity() noexcept {
   if (observer_) {
-    observer_->onStreamActivity();
+    observer_->onSessionActivity();
   }
 }
 
@@ -318,6 +318,7 @@ QuicWtSessionBase::sendDatagram(IoBufPtr datagram) noexcept {
     XLOG(ERR) << __func__ << "; err= " << writeRes.error();
     return folly::makeUnexpected(ErrorCode::GENERIC_ERROR);
   }
+  noteSessionActivity();
   return folly::unit;
 }
 
@@ -336,6 +337,7 @@ QuicWtSessionBase::closeSession(folly::Optional<uint32_t> error) noexcept {
 }
 
 void QuicWtSessionBase::onDatagrams(std::vector<IoBufPtr> dgrams) noexcept {
+  noteSessionActivity();
   if (wtHandler_) {
     wtHandler_->onDatagrams(std::move(dgrams));
   }
@@ -369,7 +371,7 @@ void QuicWtSessionBase::QuicReadCallback::readAvailable(StreamId id) noexcept {
     return;
   }
   auto& [data, eof] = readRes.value();
-  sess.noteStreamActivity();
+  sess.noteSessionActivity();
   if (eof) {
     quicSocket->setReadCallback(id, nullptr, std::nullopt);
   }
@@ -384,7 +386,7 @@ void QuicWtSessionBase::QuicReadCallback::readAvailable(StreamId id) noexcept {
 void QuicWtSessionBase::QuicReadCallback::readError(StreamId id,
                                                     QuicError error) noexcept {
   XLOG(DBG4) << __func__ << "; id=" << id << "; err=" << error;
-  sess.noteStreamActivity();
+  sess.noteSessionActivity();
   sess.sm_.onResetStream(WtStreamManager::ResetStream{
       .streamId = id,
       .err = sess.fromTransportErrorCode(getQuicAppErrCode(error))});
@@ -465,7 +467,7 @@ void QuicWtSessionBase::StreamManagerCallback::eventsAvailableImpl() noexcept {
     }
   }
   if (active) {
-    sess.noteStreamActivity();
+    sess.noteSessionActivity();
   }
 }
 
@@ -518,6 +520,7 @@ bool QuicWtSessionBase::acquireIngressStream(uint64_t id) noexcept {
   const bool bidi = success && handle.writeHandle;
   XLOG(DBG6) << __func__ << "; id=" << id << "; ok=" << success;
   if (success) {
+    noteSessionActivity();
     sm_.setReadCb(*handle.readHandle, &smCb_);
     installReadCallback(id);
     if (bidi) {
@@ -716,7 +719,7 @@ void H3WtSession::writeWtFramePrefix(uint64_t id) noexcept {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeFn(writeBuf, connectStreamId_);
   XCHECK(quicSocket_->writeChain(id, writeBuf.move(), false));
-  noteStreamActivity();
+  noteSessionActivity();
 }
 
 auto H3WtSession::onConnMaxData(WtStreamManager::MaxConnData mcd) noexcept

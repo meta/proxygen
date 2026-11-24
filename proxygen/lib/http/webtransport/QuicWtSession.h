@@ -143,7 +143,7 @@ class QuicWtSessionBase
   bool hasEgressUniCredit() const noexcept;
   bool hasEgressBidiCredit() const noexcept;
 
-  void noteStreamActivity() noexcept;
+  void noteSessionActivity() noexcept;
 
   std::shared_ptr<quic::QuicSocket> quicSocket_{nullptr};
   mutable folly::SocketAddress cachedLocalAddr_;
@@ -237,8 +237,9 @@ struct H3ConnectStreamCallback {
   }
   virtual ~H3ConnectStreamCallback() noexcept = default;
   virtual void onEvent(detail::WtStreamManager::Event&& ev) noexcept;
-  // Invoked on WebTransport stream I/O, which bypasses the CONNECT stream.
-  virtual void onStreamActivity() noexcept {
+  // Invoked when either peer creates a WebTransport stream or sends stream or
+  // datagram data, all of which bypass the CONNECT stream.
+  virtual void onSessionActivity() noexcept {
   }
   detail::WtEventVisitor visitor;
 };

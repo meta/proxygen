@@ -45,8 +45,12 @@ using folly::coro::co_withCancellation;
 using folly::coro::co_withExecutor;
 
 std::shared_ptr<WebTransport> H3CoroWtSession::start(
-    Ptr self, HTTPSourceHolder ingressSource, EgressSourcePtr egressSource) {
+    Ptr self,
+    HTTPSourceHolder ingressSource,
+    EgressSourcePtr egressSource,
+    std::chrono::milliseconds readTimeout) {
   XLOG(DBG4) << __func__;
+  connectCb_.readTimeout = readTimeout;
   std::shared_ptr<WebTransport> wt{self, &h3Wt_};
   h3Wt_.onWtSession(wt);
   auto ct = cs_.getToken();
@@ -68,6 +72,7 @@ folly::coro::Task<void> H3CoroWtSession::readLoop(
                                            proxygen::CodecVersion::H3};
 
   bool done = !bool(ingressSource);
+  connectCb_.ingress = &ingressSource;
   while (!done) {
     auto bodyEv =
         co_await folly::coro::co_awaitTry(ingressSource.readBodyEvent());
@@ -84,6 +89,7 @@ folly::coro::Task<void> H3CoroWtSession::readLoop(
     }
     done = bodyEv->eom;
   }
+  connectCb_.ingress = nullptr;
 
   XLOG(DBG4) << "H3CoroWtSession::readLoop exiting";
   loopFinished();

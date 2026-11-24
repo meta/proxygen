@@ -4585,6 +4585,50 @@ TEST_P(HQDownstreamSessionTestWebTransport, StreamActivityExtendsIdleTimeout) {
   flushRequestsAndLoop();
 }
 
+TEST_P(HQDownstreamSessionTestWebTransport, DatagramsExtendIdleTimeout) {
+  const quic::StreamId sessionId = 0;
+
+  sendSettings();
+  HTTPMessage req;
+  req.setHTTPVersion(1, 1);
+  req.setUpgradeProtocol("webtransport");
+  req.setMethod(HTTPMethod::CONNECT);
+  req.setURL("/webtransport");
+  req.getHeaders().set(HTTP_HEADER_HOST, "www.facebook.com");
+  ASSERT_EQ(sendRequest(req, /*eom=*/false), sessionId);
+
+  auto wtHandler = proxygen::test::DummyWtHandler::make();
+  auto wtCtx = wtHandler->ctx;
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders([&]() {
+    HTTPMessage resp;
+    resp.setStatusCode(200);
+    handler->txn_->sendWtHeaders(resp, std::move(wtHandler));
+  });
+  handler->expectDetachTransaction();
+  flushRequestsAndLoopN(3);
+
+  // A datagram every 100ms, for twice the idle timeout.
+  for (int i = 1; i <= 10; ++i) {
+    eventBase_.runAfterDelay(
+        [&] {
+          socketDriver_->addDatagram(getH3Datagram(sessionId, makeBuf(1)));
+          socketDriver_->addDatagramsAvailableReadEvent();
+        },
+        100 * i);
+  }
+  bool endedDuringTraffic = true;
+  eventBase_.runAfterDelay([&] { endedDuringTraffic = wtCtx->err.has_value(); },
+                           2 * kTransactionTimeout - 50);
+  flushRequestsAndLoop();
+
+  EXPECT_FALSE(endedDuringTraffic);
+  EXPECT_TRUE(wtCtx->err.has_value());
+  EXPECT_TRUE(socketDriver_->streams_[sessionId].error.has_value());
+  hqSession_->closeWhenIdle();
+  flushRequestsAndLoop();
+}
+
 // A WT uni-stream that arrives before the matching CONNECT is buffered by the
 // session and delivered to the WT handler once the 200 response promotes the
 // CONNECT stream into a WT session.

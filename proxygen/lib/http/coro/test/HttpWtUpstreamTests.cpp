@@ -11,6 +11,7 @@
 #include "proxygen/lib/http/coro/test/HTTPCoroSessionTests.h"
 #include "proxygen/lib/http/coro/test/Mocks.h"
 #include "proxygen/lib/http/coro/util/test/TestHelpers.h"
+#include <folly/coro/Baton.h>
 #include <proxygen/lib/http/codec/HQFramer.h>
 #include <proxygen/lib/http/codec/HTTP2Codec.h>
 #include <proxygen/lib/http/codec/webtransport/WebTransportCapsuleCodec.h>
@@ -868,8 +869,23 @@ INSTANTIATE_TEST_SUITE_P(
     Values(TestParams({.codecProtocol = CodecProtocol::HTTP_2})),
     paramsToTestName);
 
+class MockIngressSource : public MockHTTPSource {
+ public:
+  MOCK_METHOD(void,
+              setReadTimeout,
+              (std::chrono::milliseconds),
+              (noexcept, override));
+};
+
+folly::coro::Task<HTTPBodyEvent> eomAfter(folly::coro::Baton& baton) {
+  co_await baton;
+  co_return HTTPBodyEvent{nullptr, /*inEOM=*/true};
+}
+
 class H3CoroWtSessionTest : public Test {
  protected:
+  static constexpr std::chrono::milliseconds kReadTimeout{1234};
+
   detail::EgressSourcePtr makeEgressSource() {
     detail::EgressSourcePtr egressSource{new detail::EgressSource(&evb_)};
     egressSource_ = egressSource.get();
@@ -887,8 +903,10 @@ class H3CoroWtSessionTest : public Test {
                                              WtStreamManager::WtConfig{},
                                              /*connectStreamId=*/0);
 
-    session_->start(
-        session_, HTTPSourceHolder(&ingressSource_), makeEgressSource());
+    session_->start(session_,
+                    HTTPSourceHolder(&ingressSource_),
+                    makeEgressSource(),
+                    kReadTimeout);
   }
 
   void TearDown() override {
@@ -906,7 +924,7 @@ class H3CoroWtSessionTest : public Test {
       nullptr,
       quic::MockQuicSocketDriver::TransportEnum::CLIENT,
       "h3"};
-  NiceMock<MockHTTPSource> ingressSource_;
+  NiceMock<MockIngressSource> ingressSource_;
   HTTPStreamSource* egressSource_{nullptr};
   std::shared_ptr<DummyWtHandler::Ctx> handlerCtx_;
   detail::H3CoroWtSession::Ptr session_;
@@ -943,6 +961,36 @@ CO_TEST_F(H3CoroWtSessionTest, SendsDatagramOverQuic) {
   auto* body = asBodyEv(*egressResult);
   CO_ASSERT_TRUE(body && !body->empty());
 
+  egressSource_ = nullptr;
+}
+
+// WebTransport traffic bypasses the CONNECT stream, so it restarts that
+// stream's read timeout.
+CO_TEST_F(H3CoroWtSessionTest, SessionActivityRestartsReadTimeout) {
+  folly::coro::Baton readDone;
+  EXPECT_CALL(ingressSource_, readBodyEvent(_))
+      .WillOnce(Return(eomAfter(readDone)));
+
+  auto handler = DummyWtHandler::make();
+  handlerCtx_ = handler->ctx;
+  startSession(std::move(handler));
+  // runs the read loop up to its wait on the CONNECT stream
+  evb_.loopOnce();
+  Mock::VerifyAndClearExpectations(&ingressSource_);
+
+  EXPECT_CALL(ingressSource_, setReadTimeout(kReadTimeout));
+  CO_ASSERT_NE(handlerCtx_->wtSession, nullptr);
+  EXPECT_TRUE(
+      handlerCtx_->wtSession->sendDatagram(folly::IOBuf::copyBuffer("x"))
+          .hasValue());
+  Mock::VerifyAndClearExpectations(&ingressSource_);
+
+  readDone.post();
+  evb_.loop();
+  auto egressResult =
+      co_await folly::coro::co_awaitTry(egressSource_->readBodyEvent());
+  CO_ASSERT_TRUE(egressResult.hasValue());
+  EXPECT_TRUE(egressResult->eom);
   egressSource_ = nullptr;
 }
 
