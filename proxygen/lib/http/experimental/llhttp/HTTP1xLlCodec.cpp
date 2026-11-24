@@ -603,7 +603,7 @@ void HTTP1xLlCodec::generateHeader(
     if (!hasUpgradeHeader) {
       serializeWebsocketHeader(writeBuf, len, upstream);
       if (!hasUpgradeTokeninConnection) {
-        connectionTokens.push_back(kUpgradeConnectionToken);
+        connectionTokens.emplace_back(kUpgradeConnectionToken);
         lastConnectionToken++;
       }
     } else {
