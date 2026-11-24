@@ -155,6 +155,22 @@ TEST(HTTPMessage, TestRemoveCookieEmptyHeader) {
   EXPECT_EQ(msg.getCookie("nonexistent"), "");
 }
 
+TEST(HTTPMessage, TestRemoveCookieKeepsOtherCookies) {
+  HTTPMessage msg;
+
+  // The same name can appear more than once (RFC 6265 section 5.4)
+  msg.getHeaders().set("Cookie", "sid=new; theme=dark; sid=old; lang=en");
+
+  msg.removeCookie("theme");
+
+  EXPECT_EQ(msg.getHeaders().getSingleOrEmpty("Cookie"),
+            "sid=new; sid=old; lang=en");
+  EXPECT_EQ(msg.getCookie("sid"), "new");
+
+  msg.removeCookie("sid");
+  EXPECT_EQ(msg.getHeaders().getSingleOrEmpty("Cookie"), "lang=en");
+}
+
 TEST(HTTPMessage, TestParseQueryParamsSimple) {
   HTTPMessage msg;
   string url =
