@@ -18,7 +18,6 @@
 #include <glog/logging.h>
 #include <proxygen/lib/http/HTTPHeaderSize.h>
 #include <proxygen/lib/http/RFC2616.h>
-#include <proxygen/lib/http/codec/CodecProtocol.h>
 #include <proxygen/lib/http/codec/webtransport/WebTransportFramer.h>
 #include <proxygen/lib/http/session/HTTPSessionStats.h>
 #include <proxygen/lib/http/webtransport/HTTPWebTransport.h>

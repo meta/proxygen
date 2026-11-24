@@ -19,7 +19,6 @@ proxygen_add_library(proxygen_http_session_session
     proxygen_http_webtransport_wt_util
     fizz::fizz
     Folly::folly_conv
-    Folly::folly_cpp_attributes
     Folly::folly_random
     Folly::folly_tracing_scoped_trace_section
   EXPORTED_DEPS

@@ -11,9 +11,7 @@
 #include <chrono>
 #include <fizz/protocol/AsyncFizzBase.h>
 #include <folly/Conv.h>
-#include <folly/CppAttributes.h>
 #include <folly/Random.h>
-#include <folly/io/Cursor.h>
 #include <folly/tracing/ScopedTraceSection.h>
 #include <memory>
 #include <proxygen/lib/http/HTTPHeaderSize.h>
