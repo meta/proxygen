@@ -14,6 +14,7 @@ namespace {
 
 using namespace proxygen::coro;
 using namespace proxygen::detail;
+using folly::coro::co_current_cancellation_token;
 using folly::coro::co_error;
 using folly::coro::co_nothrow;
 constexpr uint64_t kMaxWriteSize = 65'535;
@@ -42,9 +43,9 @@ CoroWtSession::~CoroWtSession() noexcept {
 
 WtExpected<folly::Unit>::Type CoroWtSession::closeSession(
     folly::Optional<uint32_t> error) noexcept {
-  cs_.requestCancellation();
   sm.shutdown(WtStreamManager::CloseSession{.err = error.value_or(0),
                                             .msg = "closeSession"});
+  cs_.requestCancellation();
   return folly::unit;
 }
 
@@ -122,6 +123,7 @@ folly::coro::Task<void> CoroWtSession::writeLoop(Ptr self) {
   folly::IOBufQueue egressBuf{folly::IOBufQueue::cacheChainLength()};
   proxygen::detail::WtEventVisitor eventVisitor{.egress = egressBuf};
   auto& waitForEventBaton = wtSmEgressCb.waitForEvent;
+  auto ct = co_await co_current_cancellation_token;
 
   while (!eventVisitor.sessionClosed) {
     // wait for WtStreamManager control events or writable streams
@@ -136,9 +138,11 @@ folly::coro::Task<void> CoroWtSession::writeLoop(Ptr self) {
       std::visit(eventVisitor, ev);
     }
     // TODO: currently datagrams can indefinitely preempt stream data
-    auto datagrams = moveEgressDatagrams();
-    for (auto& dgram : datagrams) {
-      egressBuf.append(std::move(dgram));
+    // datagrams must not follow the close capsule
+    if (auto datagrams = moveEgressDatagrams(); !eventVisitor.sessionClosed) {
+      for (auto& dgram : datagrams) {
+        egressBuf.append(std::move(dgram));
+      }
     }
 
     auto* wh = sm.nextWritable();
@@ -161,9 +165,16 @@ folly::coro::Task<void> CoroWtSession::writeLoop(Ptr self) {
       waitForEventBaton.signal(); // re-signal for remaining streams
     }
 
+    // allow ::write a chance to send a pending wt_close_session capsule
+    auto timeout = config_.writeTimeout;
+    if (ct.isCancellationRequested()) {
+      ct = {};
+      timeout = std::min(timeout, std::chrono::milliseconds{50});
+    }
+
     if (!egressBuf.empty()) {
       auto writeRes = co_await co_awaitTry(
-          transport_->write(egressBuf, config_.writeTimeout));
+          co_withCancellation(ct, transport_->write(egressBuf, timeout)));
       if (writeRes.hasException()) {
         XLOG(DBG4) << __func__ << "; ex=" << writeRes.exception();
         break;

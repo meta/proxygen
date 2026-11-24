@@ -80,7 +80,10 @@ struct WtCapsuleCodecCallback : public WebTransportCapsuleCodec::Callback {
   }
   void onStreamsBlockedUni(WTStreamsBlockedCapsule) noexcept override {
   }
-  void onCloseSession(CloseWebTransportSessionCapsule) noexcept override {
+  void onCloseSession(
+      CloseWebTransportSessionCapsule capsule) noexcept override {
+    close.emplace(std::move(capsule));
+    baton.post();
   }
   void onDrainSession(DrainWebTransportSessionCapsule) noexcept override {
   }
@@ -844,6 +847,19 @@ CO_TEST_P_X(WtTest, Datagrams) {
   }
 
   wt->closeSession();
+}
+
+// A local close reaches the peer as a close capsule, and a datagram queued
+// before the close does not follow it.
+CO_TEST_P_X(WtTest, LocalCloseSendsCapsule) {
+  XCHECK(wt);
+  wt->sendDatagram(folly::IOBuf::copyBuffer("datagram"));
+  wt->closeSession(7);
+
+  co_await wtCodecCb.waitForEvent();
+  CO_ASSERT_TRUE(wtCodecCb.close.has_value());
+  EXPECT_EQ(wtCodecCb.close->applicationErrorCode, 7);
+  EXPECT_TRUE(wtCodecCb.dgrams.empty());
 }
 
 INSTANTIATE_TEST_SUITE_P(
