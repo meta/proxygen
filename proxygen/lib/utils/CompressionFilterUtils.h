@@ -147,6 +147,10 @@ class CompressionFilterUtils {
         output.begin(),
         output.end(),
         [enableZstd, enableGzip](RFC2616::TokenQPair elem) {
+          // A qvalue of 0 means "not acceptable" (RFC 9110 12.4.2)
+          if (elem.second <= 0) {
+            return false;
+          }
           return (enableGzip &&
                   elem.first.compare(folly::StringPiece("gzip")) == 0) ||
                  (enableZstd &&
