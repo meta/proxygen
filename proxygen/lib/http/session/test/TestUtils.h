@@ -10,7 +10,7 @@
 
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/TimeoutManager.h>
-#include <folly/io/async/test/MockAsyncTransport.h>
+#include <folly/io/async/testing/MockAsyncTransport.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/codec/HTTP1xCodec.h>
 #include <proxygen/lib/http/codec/HTTP2Codec.h>

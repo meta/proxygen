@@ -15,7 +15,7 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include <folly/io/async/EventBase.h>
-#include <folly/io/async/test/MockAsyncTransport.h>
+#include <folly/io/async/testing/MockAsyncTransport.h>
 #include <proxygen/lib/http/codec/HTTPCodec.h>
 #include <proxygen/lib/http/codec/test/MockHTTPCodec.h>
 #include <proxygen/lib/http/codec/test/TestUtils.h>

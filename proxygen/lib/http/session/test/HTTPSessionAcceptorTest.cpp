@@ -12,8 +12,8 @@
 #include <optional>
 
 #include <folly/io/async/AsyncSSLSocket.h>
-#include <folly/io/async/test/MockAsyncServerSocket.h>
-#include <folly/io/async/test/MockAsyncSocket.h>
+#include <folly/io/async/testing/MockAsyncServerSocket.h>
+#include <folly/io/async/testing/MockAsyncSocket.h>
 #include <folly/logging/xlog.h>
 #include <proxygen/lib/http/session/SimpleController.h>
 #include <proxygen/lib/http/session/test/HTTPSessionMocks.h>

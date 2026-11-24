@@ -11,8 +11,8 @@
 #include "proxygen/lib/http/coro/util/CancellableBaton.h"
 #include <folly/Random.h>
 #include <folly/io/Cursor.h>
-#include <folly/io/async/test/MockAsyncSocket.h>
-#include <folly/io/async/test/MockAsyncTransport.h>
+#include <folly/io/async/testing/MockAsyncSocket.h>
+#include <folly/io/async/testing/MockAsyncTransport.h>
 #include <folly/io/coro/Transport.h>
 #include <proxygen/lib/transport/test/MockAsyncTransportCertificate.h>
 

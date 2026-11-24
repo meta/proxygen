@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <folly/io/async/test/MockAsyncTransport.h>
+#include <folly/io/async/testing/MockAsyncTransport.h>
 #include <folly/portability/GMock.h>
 #include <proxygen/lib/http/codec/test/MockHTTPCodec.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>

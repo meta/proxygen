@@ -6,7 +6,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-#include <folly/io/async/test/MockAsyncSocket.h>
+#include <folly/io/async/testing/MockAsyncSocket.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/coro/HTTPByteEventHelpers.h>
 #include <proxygen/lib/http/coro/test/Mocks.h>
