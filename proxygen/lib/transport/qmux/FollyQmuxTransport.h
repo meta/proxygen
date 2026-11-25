@@ -31,6 +31,10 @@ class FollyQmuxTransport : public QmuxTransport {
   folly::coro::Task<folly::Unit> write(
       folly::IOBufQueue& writeBuf, std::chrono::milliseconds timeout) override;
 
+  folly::coro::Task<folly::Unit> write(folly::IOBufQueue& writeBuf,
+                                       std::chrono::milliseconds timeout,
+                                       DeliveryCallback callback) override;
+
   void shutdownWrite() override;
 
   [[nodiscard]] folly::SocketAddress getLocalAddress() const noexcept override;
@@ -39,6 +43,8 @@ class FollyQmuxTransport : public QmuxTransport {
       const noexcept override;
 
  private:
+  class DeliveryObserver;
+  std::unique_ptr<DeliveryObserver> deliveryObserver_;
   std::unique_ptr<folly::coro::TransportIf> transport_;
 };
 

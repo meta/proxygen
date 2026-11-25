@@ -49,6 +49,9 @@ proxygen_add_library(proxygen_transport_qmux_folly_qmux_transport
   SRCS
     FollyQmuxTransport.cpp
   DEPS
+    Folly::folly_coro_error
+    Folly::folly_io_async_async_base
+    Folly::folly_io_async_async_socket
     Folly::folly_io_coro_socket
   EXPORTED_DEPS
     proxygen_transport_qmux_qmux_transport
