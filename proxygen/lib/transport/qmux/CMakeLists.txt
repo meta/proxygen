@@ -36,8 +36,11 @@ proxygen_add_library(proxygen_transport_qmux_qmux_codec
 proxygen_add_library(proxygen_transport_qmux_qmux_transport
   SRCS
     QmuxTransport.cpp
+  DEPS
+    glog::glog
   EXPORTED_DEPS
     Folly::folly_coro_task
+    Folly::folly_function
     Folly::folly_io_iobuf
     Folly::folly_network_address
 )

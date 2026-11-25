@@ -8,8 +8,17 @@
 
 #include <proxygen/lib/transport/qmux/QmuxTransport.h>
 
+#include <glog/logging.h>
+
 namespace proxygen::qmux {
 
 QmuxTransport::~QmuxTransport() = default;
+
+folly::coro::Task<folly::Unit> QmuxTransport::write(
+    folly::IOBufQueue& /*writeBuf*/,
+    std::chrono::milliseconds /*timeout*/,
+    DeliveryCallback /*callback*/) {
+  LOG(FATAL) << "Unimplemented";
+}
 
 } // namespace proxygen::qmux

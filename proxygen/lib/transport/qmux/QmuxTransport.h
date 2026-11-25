@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <folly/Function.h>
 #include <folly/SocketAddress.h>
 #include <folly/coro/Task.h>
 #include <folly/io/IOBufQueue.h>
@@ -20,6 +22,9 @@ namespace proxygen::qmux {
 
 class QmuxTransport {
  public:
+  enum class DeliveryResult : std::uint8_t { Acknowledged, Cancelled };
+  using DeliveryCallback = folly::Function<void(DeliveryResult)>;
+
   virtual ~QmuxTransport();
 
   virtual folly::coro::Task<size_t> read(folly::IOBufQueue& readBuf,
@@ -29,6 +34,11 @@ class QmuxTransport {
 
   virtual folly::coro::Task<folly::Unit> write(
       folly::IOBufQueue& writeBuf, std::chrono::milliseconds timeout) = 0;
+
+  virtual folly::coro::Task<folly::Unit> write(
+      folly::IOBufQueue& writeBuf,
+      std::chrono::milliseconds timeout,
+      DeliveryCallback callback);
 
   virtual void shutdownWrite() = 0;
 
