@@ -304,21 +304,22 @@ void HQSession::onStopSending(quic::StreamId id,
   auto stream = findStream(id);
   if (stream) {
     handleWriteError(stream, error);
-  } else if (advertisedWebTransport() &&
-             // TODO: is it valid to STOP_SENDING WebTransport streams with
-             // error codes outside this range (eg: REJECTED)?
-             WebTransport::isEncodedApplicationErrorCode(error)) {
+  } else if (advertisedWebTransport()) {
     // might be a WT stream, but there's no mapping HERE to find the session ID
     // just tell all sessions to stop sending
-    auto appErrorCode = WebTransport::toApplicationErrorCode(errorCode);
-    if (!appErrorCode) {
-      return;
+    uint32_t wtErrorCode = WebTransport::kInternalError;
+    if (errorCode == HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED ||
+        errorCode == HTTP3::ErrorCode::WT_SESSION_GONE) {
+      wtErrorCode = static_cast<uint32_t>(errorCode);
+    } else if (auto appErrorCode =
+                   WebTransport::toApplicationErrorCode(errorCode)) {
+      wtErrorCode = *appErrorCode;
     }
 
     for (auto& streamIt : streams_) {
       if (!streamIt.second.detached_ &&
           streamIt.second.txn_.isWebTransportConnectStream()) {
-        if (streamIt.second.txn_.onWebTransportStopSending(id, *appErrorCode)) {
+        if (streamIt.second.txn_.onWebTransportStopSending(id, wtErrorCode)) {
           break;
         }
       }

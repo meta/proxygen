@@ -2132,6 +2132,37 @@ TEST_P(HQUpstreamSessionTestWebTransport, PairOfUnisReset) {
   closeWTSession();
 }
 
+TEST_P(HQUpstreamSessionTestWebTransport, StopSendingWithHTTP3Code) {
+  socketDriver_->setMaxUniStreams(10);
+  folly::IOBufQueue capsuleQueue;
+  WTMaxStreamsCapsule maxStreamsCapsule{.maximumStreams = 10};
+  EXPECT_TRUE(
+      writeWTMaxStreams(capsuleQueue, maxStreamsCapsule, false).has_value());
+  sendPartialBody(sessionId_, capsuleQueue.move(), false);
+  flushAndLoopN(2);
+
+  const std::vector<std::pair<HTTP3::ErrorCode, uint32_t>> cases = {
+      {HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED,
+       WebTransport::kBufferedStreamRejected},
+      {HTTP3::ErrorCode::WT_SESSION_GONE, WebTransport::kSessionGone},
+      {HTTP3::ErrorCode::HTTP_REQUEST_CANCELLED, WebTransport::kInternalError},
+  };
+  for (const auto& [code, expected] : cases) {
+    auto writeHandle = wt_->createUniStream().value();
+    auto writeId = writeHandle->getID();
+    folly::Optional<uint32_t> stopSendingError;
+    folly::CancellationCallback writeCancel(writeHandle->getCancelToken(), [&] {
+      stopSendingError = writeHandle->exception()->error;
+      writeHandle->resetStream(0);
+    });
+    socketDriver_->addStopSending(writeId, code);
+    flushAndLoopN(2);
+    EXPECT_EQ(stopSendingError, expected);
+  }
+
+  closeWTSession();
+}
+
 TEST_P(HQUpstreamSessionTestWebTransport, ResetKeepsStreamPrefaceReliable) {
   socketDriver_->reliableResetSupported_ = true;
   socketDriver_->setMaxUniStreams(10);
