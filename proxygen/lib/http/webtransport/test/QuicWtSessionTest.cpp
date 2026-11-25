@@ -1106,6 +1106,10 @@ TEST_F(H3WtSessionTest, CreateUniBidiStream) {
      * }
      */
     auto& streams = socketDriver_.streams_;
+    // checkpoint updated
+    EXPECT_TRUE(streams[uniId].reliableResetCheckpoint);
+    EXPECT_TRUE(streams[bidiId].reliableResetCheckpoint);
+
     const auto* buf = streams[uniId].pendingWriteBuf.front();
     EXPECT_TRUE(buf && buf->computeChainDataLength() == 3);
     EXPECT_EQ(buf->data()[0], 0x40); // varint encoding prefix

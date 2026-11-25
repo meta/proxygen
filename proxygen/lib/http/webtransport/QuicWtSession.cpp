@@ -734,6 +734,7 @@ void H3WtSession::writeWtFramePrefix(uint64_t id) noexcept {
   folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
   writeFn(writeBuf, connectStreamId_);
   XCHECK(quicSocket_->writeChain(id, writeBuf.move(), false));
+  std::ignore = quicSocket_->updateReliableDeliveryCheckpoint(id);
   noteSessionActivity();
 }
 
