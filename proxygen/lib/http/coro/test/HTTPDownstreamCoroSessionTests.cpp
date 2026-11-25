@@ -4857,11 +4857,9 @@ CO_TEST_P_X(H3DownstreamWtTest, HeldStreamRejectedOnTimeout) {
   auto uniId = openPeerUniStream(/*connectStreamId=*/0);
   co_await folly::coro::sleep(std::chrono::milliseconds(100));
 
-  const uint64_t bufferedRejectedErr =
-      WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected);
   auto &stream = muxTransport_->socketDriver_.streams_[uniId];
   CO_ASSERT_TRUE(stream.error.has_value());
-  EXPECT_EQ(*stream.error, bufferedRejectedErr);
+  EXPECT_EQ(*stream.error, HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
 }
 
 CO_TEST_P_X(H3DownstreamWtTest, DatagramBeforeConnectRequest) {

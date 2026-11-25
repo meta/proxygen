@@ -4821,10 +4821,9 @@ TEST_P(HQDownstreamSessionTestWebTransport,
   socketDriver_->addReadEOF(sessionId, std::chrono::milliseconds(0));
   flushRequestsAndLoop();
 
-  const uint64_t bufferedRejectedErr =
-      WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected);
   ASSERT_TRUE(socketDriver_->streams_[wtStreamId].error.has_value());
-  EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error, bufferedRejectedErr);
+  EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error,
+            HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
   hqSession_->closeWhenIdle();
 }
 
@@ -4940,10 +4939,9 @@ TEST_P(HQDownstreamSessionTestWebTransport,
   EXPECT_CALL(*handler, onWebTransportUniStream(_, _)).Times(0);
   flushRequestsAndLoopN(3);
 
-  const uint64_t bufferedRejectedErr =
-      WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected);
   ASSERT_TRUE(socketDriver_->streams_[wtStreamId].error.has_value());
-  EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error, bufferedRejectedErr);
+  EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error,
+            HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
 
   hqSession_->dropConnection();
   flushRequestsAndLoop();
@@ -4964,10 +4962,9 @@ TEST_P(HQDownstreamSessionTestWebTransport, BufferedWTStreamRejectedOnClose) {
   hqSession_->closeWhenIdle();
   flushRequestsAndLoop();
 
-  const uint64_t bufferedRejectedErr =
-      WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected);
   ASSERT_TRUE(socketDriver_->streams_[wtStreamId].error.has_value());
-  EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error, bufferedRejectedErr);
+  EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error,
+            HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
 }
 
 // A buffered stream whose CONNECT never arrives is rejected with
@@ -4985,10 +4982,9 @@ TEST_P(HQDownstreamSessionTestWebTransport, BufferedWTStreamExpires) {
   eventBase_.runAfterDelay([&] { eventBase_.terminateLoopSoon(); }, 100);
   eventBase_.loopForever();
 
-  const uint64_t bufferedRejectedErr =
-      WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected);
   ASSERT_TRUE(socketDriver_->streams_[wtStreamId].error.has_value());
-  EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error, bufferedRejectedErr);
+  EXPECT_EQ(*socketDriver_->streams_[wtStreamId].error,
+            HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
 
   hqSession_->closeWhenIdle();
   flushRequestsAndLoop();
@@ -5034,10 +5030,9 @@ TEST_P(HQDownstreamSessionTestWebTransport,
   handler->expectDetachTransaction();
   flushRequestsAndLoopN(3);
 
-  const uint64_t bufferedRejectedErr =
-      WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected);
   ASSERT_TRUE(socketDriver_->streams_[wtStreamId2].error.has_value());
-  EXPECT_EQ(*socketDriver_->streams_[wtStreamId2].error, bufferedRejectedErr);
+  EXPECT_EQ(*socketDriver_->streams_[wtStreamId2].error,
+            HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
 
   hqSession_->dropConnection();
   flushRequestsAndLoop();

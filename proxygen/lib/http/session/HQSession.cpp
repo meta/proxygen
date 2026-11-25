@@ -146,10 +146,6 @@ uint32_t writeWTStreamPrefaceToSock(
   }
   return *res;
 }
-
-const auto kBufferedRejectedErr = static_cast<proxygen::HTTP3::ErrorCode>(
-    proxygen::WebTransport::toHTTPErrorCode(
-        proxygen::WebTransport::kBufferedStreamRejected));
 } // namespace
 
 using namespace proxygen::hq;
@@ -1459,7 +1455,7 @@ void HQSession::rejectStream(quic::StreamId id, HTTP3::ErrorCode err) {
 }
 
 void HQSession::rejectHeldWTStream(quic::StreamId id) {
-  rejectStream(id, kBufferedRejectedErr);
+  rejectStream(id, HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
 }
 
 void HQSession::cleanupPendingStreams() {
@@ -2506,7 +2502,7 @@ void HQSession::detachStreamTransport(HQStreamTransportBase* hqStream) {
       clearStreamCallbacks(streamId);
     }
     for (auto id : releaseHeldWTStreams(streamId)) {
-      rejectStream(id, kBufferedRejectedErr);
+      rejectStream(id, HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
     }
     eraseStream(streamId);
   }
@@ -3615,7 +3611,7 @@ void HQSession::deliverPendingWTStreams(quic::StreamId sessionID) noexcept {
     VLOG(4) << "WT connect stream gone before drain wt-sess-id=" << sessionID
             << " sess=" << *this;
     for (auto id : ids) {
-      rejectStream(id, kBufferedRejectedErr);
+      rejectStream(id, HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
     }
     return;
   }
@@ -3629,7 +3625,7 @@ void HQSession::deliverPendingWTStreams(quic::StreamId sessionID) noexcept {
     if (connectStream->txn_.isIngressComplete()) {
       VLOG(4) << "WT connect stream ended mid-drain, rejecting id=" << id
               << " wt-sess-id=" << sessionID << " sess=" << *this;
-      rejectStream(id, kBufferedRejectedErr);
+      rejectStream(id, HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
       continue;
     }
     deliverWTStream(connectStream, id);

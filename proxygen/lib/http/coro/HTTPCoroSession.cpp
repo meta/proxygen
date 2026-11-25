@@ -91,8 +91,6 @@ void setSecureMsg(HTTPMessage& msg,
 
 using CoroWtSession = proxygen::coro::detail::CoroWtSession;
 
-const auto kBufferedStreamRejectedErr = static_cast<HTTP3::ErrorCode>(
-    WebTransport::toHTTPErrorCode(WebTransport::kBufferedStreamRejected));
 class CoroWtSessionImpl : public CoroWtSession {
  public:
   using CoroWtSession::CoroWtSession;
@@ -2861,7 +2859,7 @@ void HTTPQuicCoroSession::onConnectionError(quic::QuicError error) noexcept {
               << " sess=" << *this;
   }
   connectionError(httpError, "QUIC connection error");
-  rejectAllPendingStreams(kBufferedStreamRejectedErr);
+  rejectAllPendingStreams(HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
   datagramsBuffer_.clear();
   /**
    * Matching both destructors in QuicClientTransport & QuicServerTransport;
@@ -3130,7 +3128,7 @@ std::vector<quic::StreamId> HTTPQuicCoroSession::releaseHeldWtStreams(
 }
 
 void HTTPQuicCoroSession::rejectHeldWTStream(quic::StreamId id) {
-  rejectStream(id, kBufferedStreamRejectedErr);
+  rejectStream(id, HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
 }
 
 bool HTTPQuicCoroSession::peerRejectedWt() const {
@@ -3183,7 +3181,8 @@ void HTTPQuicCoroSession::drainPendingWtStreams(
              << " sess=" << *this;
   for (auto streamId : streams) {
     if (!wtSession || !wtSession->wtSession().acquireIngressStream(streamId)) {
-      rejectStream(streamId, err.value_or(kBufferedStreamRejectedErr));
+      rejectStream(streamId,
+                   err.value_or(HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED));
     }
   }
 }
@@ -3725,7 +3724,7 @@ folly::coro::Task<void> HTTPQuicCoroSession::writeLoop() noexcept {
     }
   }
   if (quicSocket_->good()) {
-    rejectAllPendingStreams(kBufferedStreamRejectedErr);
+    rejectAllPendingStreams(HTTP3::ErrorCode::WT_BUFFERED_STREAM_REJECTED);
     datagramsBuffer_.clear();
     XLOG(DBG4) << "Closing QuicSocket from writeLoop with "
                << ((connectionError_) ? "error" : "no error")
