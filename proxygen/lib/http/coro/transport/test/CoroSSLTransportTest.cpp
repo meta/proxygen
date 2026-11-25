@@ -12,8 +12,8 @@
 #include <folly/coro/Collect.h>
 #include <folly/coro/Sleep.h>
 #include <folly/io/async/ssl/BasicTransportCertificate.h>
-#include <folly/io/async/test/AsyncSSLSocketTest.h>
-#include <folly/io/async/test/TestSSLServer.h>
+#include <folly/io/async/testing/AsyncSSLSocketTest.h>
+#include <folly/io/async/testing/TestSSLServer.h>
 #include <folly/io/coro/ServerSocket.h>
 #include <folly/io/coro/Transport.h>
 #include <folly/portability/GTest.h>
