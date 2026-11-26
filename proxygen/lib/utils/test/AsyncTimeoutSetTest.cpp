@@ -8,9 +8,9 @@
 
 #include <proxygen/lib/utils/AsyncTimeoutSet.h>
 
+#include <folly/io/async/DelayedDestruction.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/EventUtil.h>
-#include <folly/io/async/test/UndelayedDestruction.h>
 #include <folly/io/async/test/Util.h>
 #include <folly/io/async/testing/MockTimeoutManager.h>
 #include <folly/portability/GTest.h>
